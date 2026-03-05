@@ -14,7 +14,7 @@ from googleapiclient.discovery import build
 TOKEN                = os.environ.get("TOKEN")
 GOOGLE_CREDS_JSON    = os.environ.get("GOOGLE_CREDS_JSON")  # JSON das credenciais como string
 SPREADSHEET_ID       = os.environ.get("SPREADSHEET_ID")     # ID da planilha
-SHEET_RANGE          = "Sheet1!A2:C"                        # Colunas: discord_user_id | nome | youtube_channel_id
+SHEET_RANGE          = "YouTube!A2:C"                       # Colunas: Alias | ID no Discord | ID do Canal
 
 CANAL_DIVULGACAO_ID  = 1468613615987851275
 CARGO_STREAMANDO_NOME = "STREAMANDO AGORA"
@@ -65,9 +65,9 @@ def get_canais_youtube():
         for row in rows:
             if len(row) >= 3:
                 canais.append({
-                    "discord_user_id": row[0].strip(),
-                    "nome":            row[1].strip(),
-                    "channel_id":      row[2].strip(),
+                    "nome":            row[0].strip(),  # Alias
+                    "discord_user_id": row[1].strip(),  # ID no Discord
+                    "channel_id":      row[2].strip(),  # ID do Canal
                 })
         return canais
     except Exception as e:
