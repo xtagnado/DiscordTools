@@ -152,13 +152,11 @@ def build_embed_twitch(membro, dados, mention):
         f"🟣 **TEM LIVE ACONTECENDO NA TWITCH:**\n\n"
         f"**{membro.display_name}** está ao vivo na roxinha 🟪🟪🟪\n"
         f"Bora lá assistir esse conteúdo, se inscrever e apoiar o pessoal da nossa comunidade. 💜💜💜💜💜\n\n"
-        f"**🎮 {dados['titulo']}**\n"
+        f"**🎮 [{dados['titulo']}]({dados['url']})**\n"
         f"📂 {dados['jogo']}\n\n"
-        f"[▶️ Clique aqui para assistir a live!]({dados['url']})\n\n"
         f"{mention}"
     )
     embed.set_author(name=membro.display_name, icon_url=membro.display_avatar.url)
-    embed.set_footer(text="Twitch Live")
     return embed
 
 
@@ -168,13 +166,11 @@ def build_embed_youtube_live(membro, dados, mention):
         f"🔴 **LIVE NO YOUTUBE AGORA. CORRE LÁ PRA VER:**\n\n"
         f"**{membro.display_name}** está ao vivo e operante. 🟥🟥🟥\n"
         f"Bora lá assistir esse conteúdo, se inscrever e apoiar o pessoal da nossa comunidade. ❤️❤️❤️❤️❤️\n\n"
-        f"**🎬 {dados['titulo']}**\n"
+        f"**🎬 [{dados['titulo']}]({dados['url']})**\n"
         f"📂 {dados['jogo']}\n\n"
-        f"[▶️ Clique aqui para assistir a live!]({dados['url']})\n\n"
         f"{mention}"
     )
     embed.set_author(name=membro.display_name, icon_url=membro.display_avatar.url)
-    embed.set_footer(text="YouTube Live")
     return embed
 
 
@@ -184,8 +180,7 @@ def build_embed_youtube_video(nome, dados, mention, avatar_url=None):
         f"🔵 **ACABOU DE SAIR VÍDEO NOVINHO EM FOLHA:**\n\n"
         f"**{nome}** postou um vídeo novo agora em seu canal. 🟦🟦🟦\n"
         f"Assista o vídeo, curta, comente, se inscreva (se não for inscrito) e apoie um criador de conteúdo da nossa comunidade. 🩵🩵🩵🩵🩵\n\n"
-        f"**🎥 {dados['titulo']}**\n\n"
-        f"[▶️ Clique aqui para assistir!]({dados['url']})\n\n"
+        f"**🎥 [{dados['titulo']}]({dados['url']})**\n\n"
         f"{mention}"
     )
     if avatar_url:
@@ -194,7 +189,6 @@ def build_embed_youtube_video(nome, dados, mention, avatar_url=None):
         embed.set_author(name=nome)
     if dados.get("thumb"):
         embed.set_image(url=dados["thumb"])
-    embed.set_footer(text="YouTube Vídeo")
     return embed
 
 # ─────────────────────────────────────────
