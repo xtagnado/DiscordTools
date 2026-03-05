@@ -5,33 +5,22 @@ import os
 from datetime import datetime
 
 # ─────────────────────────────────────────
-#  CONFIGURAÇÕES — edite aqui
+#  CONFIGURAÇÕES
 # ─────────────────────────────────────────
-TOKEN = "SEU_TOKEN_AQUI"
+TOKEN = os.environ.get("TOKEN")
 
-# ID do canal onde as divulgações serão postadas
-CANAL_DIVULGACAO_ID = 000000000000000000  # substitua pelo ID real
+CANAL_DIVULGACAO_ID = 1468613615987851275
 
-# Cargo que será atribuído ao streamer
 CARGO_STREAMANDO_NOME = "STREAMANDO AGORA"
 
-# Mapeamento: ID da role do usuário → mention que será usada no embed
-# Ex: se o usuário tem a role "Twitch Streamer", menciona @TwitchStreamer
-ROLES_PLATAFORMA = {
-    "Twitch Streamer":   "twitch",
-    "YouTuber":          "youtube",
-    # adicione mais se precisar
-}
-
-# IDs das roles para menção no canal (opcional — deixe vazio para não mencionar)
-# Formato: "nome_da_role": ID_da_role
 MENTION_ROLES = {
-    "twitch":  000000000000000000,  # ID da role que será mencionada nas lives Twitch
-    "youtube": 000000000000000000,  # ID da role que será mencionada nos vídeos/lives YouTube
+    "twitch":        1478843698614898688,
+    "youtube_live":  1478843587914498118,
+    "youtube_video": 1478843428937666580,
 }
 
 # ─────────────────────────────────────────
-#  PERSISTÊNCIA (evita re-postar mesma live)
+#  PERSISTÊNCIA
 # ─────────────────────────────────────────
 LIVES_ATIVAS_FILE = "lives_ativas.json"
 
@@ -56,114 +45,108 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 lives_ativas = carregar_lives()
 
 # ─────────────────────────────────────────
-#  HELPERS
+#  DETECTAR PLATAFORMA
 # ─────────────────────────────────────────
-def detectar_plataforma(activity: discord.Activity):
-    """Retorna ('twitch', dados) ou ('youtube', dados) ou (None, None)"""
+def detectar_plataforma(activity):
     if isinstance(activity, discord.Streaming):
         url = (activity.url or "").lower()
         if "twitch.tv" in url:
             return "twitch", {
                 "titulo": activity.name or "Live sem título",
                 "url":    activity.url,
-                "jogo":   activity.game or "Nenhum",
-                "thumb":  activity.assets.get("large_image") if activity.assets else None,
+                "jogo":   activity.game or "Nenhuma categoria",
+                "thumb":  None,
             }
         if "youtube.com" in url or "youtu.be" in url:
             return "youtube_live", {
                 "titulo": activity.name or "Live sem título",
                 "url":    activity.url,
+                "jogo":   activity.game or "Nenhuma categoria",
                 "thumb":  None,
             }
 
     if isinstance(activity, discord.Activity):
         name = (activity.name or "").lower()
-        # YouTube Music / vídeo via Rich Presence
         if "youtube" in name and activity.type == discord.ActivityType.watching:
-            state = activity.state or ""
-            url_asset = activity.url if hasattr(activity, "url") else ""
+            url = activity.url if hasattr(activity, "url") and activity.url else "https://youtube.com"
             return "youtube_video", {
                 "titulo": activity.details or activity.name or "Vídeo sem título",
-                "canal":  state,
-                "url":    url_asset or "https://youtube.com",
+                "canal":  activity.state or "",
+                "url":    url,
                 "thumb":  None,
             }
 
     return None, None
 
-
-def build_embed_twitch(membro, dados, mention_str):
+# ─────────────────────────────────────────
+#  EMBEDS
+# ─────────────────────────────────────────
+def build_embed_twitch(membro, dados, mention):
     embed = discord.Embed(
-        title=f"🔴 {membro.display_name} está ao vivo na Twitch!",
-        description=f"**{dados['titulo']}**",
-        url=dados["url"],
-        color=0x9146FF,
+        color=0x9146FF,  # roxo Twitch
         timestamp=datetime.utcnow()
     )
-    embed.add_field(name="🎮 Jogo", value=dados["jogo"], inline=True)
-    embed.add_field(name="📺 Assistir", value=f"[Clique aqui]({dados['url']})", inline=True)
+    embed.description = (
+        f"🟣 **TEM LIVE ACONTECENDO NA TWITCH:**\n\n"
+        f"**{membro.display_name}** está ao vivo na roxinha 🟪🟪🟪\n"
+        f"Bora lá assistir esse conteúdo, se inscrever e apoiar o pessoal da nossa comunidade. 💜💜💜💜💜\n\n"
+        f"**🎮 {dados['titulo']}**\n"
+        f"📂 {dados['jogo']}\n\n"
+        f"[▶️ Clique aqui para assistir a live!]({dados['url']})\n\n"
+        f"{mention}"
+    )
     embed.set_author(name=membro.display_name, icon_url=membro.display_avatar.url)
     embed.set_footer(text="Twitch Live")
-    if mention_str:
-        embed.description += f"\n\n{mention_str}"
     return embed
 
 
-def build_embed_youtube_live(membro, dados, mention_str):
+def build_embed_youtube_live(membro, dados, mention):
     embed = discord.Embed(
-        title=f"🔴 {membro.display_name} está ao vivo no YouTube!",
-        description=f"**{dados['titulo']}**",
-        url=dados["url"],
-        color=0xFF0000,
+        color=0xFF0000,  # vermelho vivo YouTube
         timestamp=datetime.utcnow()
     )
-    embed.add_field(name="📺 Assistir", value=f"[Clique aqui]({dados['url']})", inline=True)
+    embed.description = (
+        f"🔴 **LIVE NO YOUTUBE AGORA. CORRE LÁ PRA VER:**\n\n"
+        f"**{membro.display_name}** está ao vivo e operante. 🟥🟥🟥\n"
+        f"Bora lá assistir esse conteúdo, se inscrever e apoiar o pessoal da nossa comunidade. ❤️❤️❤️❤️❤️\n\n"
+        f"**🎬 {dados['titulo']}**\n"
+        f"📂 {dados['jogo']}\n\n"
+        f"[▶️ Clique aqui para assistir a live!]({dados['url']})\n\n"
+        f"{mention}"
+    )
     embed.set_author(name=membro.display_name, icon_url=membro.display_avatar.url)
     embed.set_footer(text="YouTube Live")
-    if mention_str:
-        embed.description += f"\n\n{mention_str}"
     return embed
 
 
-def build_embed_youtube_video(membro, dados, mention_str):
+def build_embed_youtube_video(membro, dados, mention):
     embed = discord.Embed(
-        title=f"🎬 {membro.display_name} postou um vídeo no YouTube!",
-        description=f"**{dados['titulo']}**",
-        url=dados["url"],
-        color=0xFF0000,
+        color=0x3B82F6,  # azul 🩵
         timestamp=datetime.utcnow()
     )
-    if dados.get("canal"):
-        embed.add_field(name="📢 Canal", value=dados["canal"], inline=True)
-    embed.add_field(name="▶️ Assistir", value=f"[Clique aqui]({dados['url']})", inline=True)
+    embed.description = (
+        f"🔵 **ACABOU DE SAIR VÍDEO NOVINHO EM FOLHA:**\n\n"
+        f"**{membro.display_name}** postou um vídeo novo agora em seu canal. 🟦🟦🟦\n"
+        f"Assista o vídeo, curta, comente, se inscreva (se não for inscrito) e apoie um criador de conteúdo da nossa comunidade. 🩵🩵🩵🩵🩵\n\n"
+        f"**🎥 {dados['titulo']}**\n\n"
+        f"[▶️ Clique aqui para assistir!]({dados['url']})\n\n"
+        f"{mention}"
+    )
     embed.set_author(name=membro.display_name, icon_url=membro.display_avatar.url)
     embed.set_footer(text="YouTube Vídeo")
-    if mention_str:
-        embed.description += f"\n\n{mention_str}"
     return embed
 
-
-def get_mention_str(guild, membro, plataforma):
-    """Descobre qual role de plataforma o usuário tem e retorna a mention."""
-    plataforma_map = {
-        "twitch":        "twitch",
-        "youtube_live":  "youtube",
-        "youtube_video": "youtube",
-    }
-    chave = plataforma_map.get(plataforma)
-    if not chave:
-        return ""
-
-    role_id = MENTION_ROLES.get(chave)
+# ─────────────────────────────────────────
+#  HELPERS
+# ─────────────────────────────────────────
+def get_mention(guild, plataforma):
+    role_id = MENTION_ROLES.get(plataforma)
     if not role_id:
         return ""
-
     role = guild.get_role(role_id)
     return role.mention if role else ""
 
-
 def gerar_chave(membro_id, plataforma, dados):
-    """Chave única por live/vídeo para evitar spam."""
     url = dados.get("url", "") or dados.get("titulo", "")
     return f"{membro_id}:{plataforma}:{url}"
 
@@ -183,12 +166,8 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
     if not canal:
         return
 
-    # ── Cargo "STREAMANDO AGORA" ──────────────────────────────────────
+    # ── Cargo STREAMANDO AGORA ────────────────────────────────────────
     cargo_stream = discord.utils.get(guild.roles, name=CARGO_STREAMANDO_NOME)
-
-    atividades_antes = {type(a) for a in before.activities}
-    atividades_depois = {type(a) for a in after.activities}
-
     estava_streamando = any(isinstance(a, discord.Streaming) for a in before.activities)
     esta_streamando   = any(isinstance(a, discord.Streaming) for a in after.activities)
 
@@ -198,7 +177,7 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
         elif estava_streamando and not esta_streamando:
             await after.remove_roles(cargo_stream, reason="Saiu da live")
 
-    # ── Detectar nova atividade relevante ────────────────────────────
+    # ── Detectar novas atividades ─────────────────────────────────────
     atividades_novas = [a for a in after.activities if a not in before.activities]
 
     for atividade in atividades_novas:
@@ -207,29 +186,26 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
             continue
 
         chave = gerar_chave(after.id, plataforma, dados)
-
-        # Já postou essa live/vídeo? Pula.
         if chave in lives_ativas:
             continue
 
         lives_ativas[chave] = True
         salvar_lives(lives_ativas)
 
-        mention_str = get_mention_str(guild, after, plataforma)
+        mention = get_mention(guild, plataforma)
 
         if plataforma == "twitch":
-            embed = build_embed_twitch(after, dados, mention_str)
+            embed = build_embed_twitch(after, dados, mention)
         elif plataforma == "youtube_live":
-            embed = build_embed_youtube_live(after, dados, mention_str)
+            embed = build_embed_youtube_live(after, dados, mention)
         elif plataforma == "youtube_video":
-            embed = build_embed_youtube_video(after, dados, mention_str)
+            embed = build_embed_youtube_video(after, dados, mention)
         else:
             continue
 
         await canal.send(embed=embed)
 
-
-# ── Limpar chave ao sair da live (permite re-post se ID mudar) ────────
+    # ── Limpar chaves ao encerrar live ────────────────────────────────
     if estava_streamando and not esta_streamando:
         chaves_remover = [k for k in lives_ativas if k.startswith(f"{after.id}:")]
         for k in chaves_remover:
