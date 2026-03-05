@@ -1,16 +1,22 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 import json
 import os
+import aiohttp
+import xml.etree.ElementTree as ET
 from datetime import datetime
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
 
 # ─────────────────────────────────────────
 #  CONFIGURAÇÕES
 # ─────────────────────────────────────────
-TOKEN = os.environ.get("TOKEN")
+TOKEN                = os.environ.get("TOKEN")
+GOOGLE_CREDS_JSON    = os.environ.get("GOOGLE_CREDS_JSON")  # JSON das credenciais como string
+SPREADSHEET_ID       = os.environ.get("SPREADSHEET_ID")     # ID da planilha
+SHEET_RANGE          = "Sheet1!A2:C"                        # Colunas: discord_user_id | nome | youtube_channel_id
 
-CANAL_DIVULGACAO_ID = 1468613615987851275
-
+CANAL_DIVULGACAO_ID  = 1468613615987851275
 CARGO_STREAMANDO_NOME = "STREAMANDO AGORA"
 
 MENTION_ROLES = {
@@ -22,59 +28,118 @@ MENTION_ROLES = {
 # ─────────────────────────────────────────
 #  PERSISTÊNCIA
 # ─────────────────────────────────────────
-LIVES_ATIVAS_FILE = "lives_ativas.json"
+LIVES_ATIVAS_FILE  = "lives_ativas.json"
+VIDEOS_VISTOS_FILE = "videos_vistos.json"
 
-def carregar_lives():
-    if os.path.exists(LIVES_ATIVAS_FILE):
-        with open(LIVES_ATIVAS_FILE, "r") as f:
+def carregar_json(path):
+    if os.path.exists(path):
+        with open(path, "r") as f:
             return json.load(f)
     return {}
 
-def salvar_lives(data):
-    with open(LIVES_ATIVAS_FILE, "w") as f:
+def salvar_json(path, data):
+    with open(path, "w") as f:
         json.dump(data, f, indent=2)
+
+lives_ativas  = carregar_json(LIVES_ATIVAS_FILE)
+videos_vistos = carregar_json(VIDEOS_VISTOS_FILE)
+
+# ─────────────────────────────────────────
+#  GOOGLE SHEETS
+# ─────────────────────────────────────────
+def get_canais_youtube():
+    """Lê a planilha e retorna lista de dicts com discord_user_id, nome, channel_id."""
+    try:
+        creds_info = json.loads(GOOGLE_CREDS_JSON)
+        creds = Credentials.from_service_account_info(
+            creds_info,
+            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
+        )
+        service = build("sheets", "v4", credentials=creds)
+        result = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=SHEET_RANGE
+        ).execute()
+        rows = result.get("values", [])
+        canais = []
+        for row in rows:
+            if len(row) >= 3:
+                canais.append({
+                    "discord_user_id": row[0].strip(),
+                    "nome":            row[1].strip(),
+                    "channel_id":      row[2].strip(),
+                })
+        return canais
+    except Exception as e:
+        print(f"❌ Erro ao ler planilha: {e}")
+        return []
+
+# ─────────────────────────────────────────
+#  RSS YOUTUBE
+# ─────────────────────────────────────────
+async def buscar_ultimo_video(session, channel_id):
+    """Retorna o vídeo mais recente do canal via RSS."""
+    url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+    try:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            if resp.status != 200:
+                return None
+            text = await resp.text()
+            root = ET.fromstring(text)
+            ns = {
+                "atom":  "http://www.w3.org/2005/Atom",
+                "media": "http://search.yahoo.com/mrss/",
+                "yt":    "http://www.youtube.com/xml/schemas/2015",
+            }
+            entry = root.find("atom:entry", ns)
+            if entry is None:
+                return None
+
+            video_id  = entry.find("yt:videoId", ns)
+            titulo    = entry.find("atom:title", ns)
+            link      = entry.find("atom:link", ns)
+            thumb_url = f"https://img.youtube.com/vi/{video_id.text}/maxresdefault.jpg" if video_id is not None else None
+
+            return {
+                "id":    video_id.text if video_id is not None else None,
+                "titulo": titulo.text if titulo is not None else "Vídeo sem título",
+                "url":   link.attrib.get("href", "") if link is not None else "",
+                "thumb": thumb_url,
+            }
+    except Exception as e:
+        print(f"❌ Erro RSS canal {channel_id}: {e}")
+        return None
 
 # ─────────────────────────────────────────
 #  SETUP DO BOT
 # ─────────────────────────────────────────
 intents = discord.Intents.default()
-intents.members = True
+intents.members   = True
 intents.presences = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
-lives_ativas = carregar_lives()
 
 # ─────────────────────────────────────────
-#  DETECTAR PLATAFORMA
+#  DETECTAR PLATAFORMA (só lives)
 # ─────────────────────────────────────────
 def detectar_plataforma(activity):
-    if isinstance(activity, discord.Streaming):
-        url = (activity.url or "").lower()
-        if "twitch.tv" in url:
-            return "twitch", {
-                "titulo": activity.name or "Live sem título",
-                "url":    activity.url,
-                "jogo":   activity.game or "Nenhuma categoria",
-                "thumb":  None,
-            }
-        if "youtube.com" in url or "youtu.be" in url:
-            return "youtube_live", {
-                "titulo": activity.name or "Live sem título",
-                "url":    activity.url,
-                "jogo":   activity.game or "Nenhuma categoria",
-                "thumb":  None,
-            }
+    if not isinstance(activity, discord.Streaming):
+        return None, None
 
-    if isinstance(activity, discord.Activity):
-        name = (activity.name or "").lower()
-        if "youtube" in name and activity.type == discord.ActivityType.watching:
-            url = activity.url if hasattr(activity, "url") and activity.url else "https://youtube.com"
-            return "youtube_video", {
-                "titulo": activity.details or activity.name or "Vídeo sem título",
-                "canal":  activity.state or "",
-                "url":    url,
-                "thumb":  None,
-            }
+    url = (activity.url or "").lower()
+
+    if "twitch.tv" in url:
+        return "twitch", {
+            "titulo": activity.name or "Live sem título",
+            "url":    activity.url,
+            "jogo":   activity.game or "Nenhuma categoria",
+        }
+    if "youtube.com" in url or "youtu.be" in url:
+        return "youtube_live", {
+            "titulo": activity.name or "Live sem título",
+            "url":    activity.url,
+            "jogo":   activity.game or "Nenhuma categoria",
+        }
 
     return None, None
 
@@ -82,10 +147,7 @@ def detectar_plataforma(activity):
 #  EMBEDS
 # ─────────────────────────────────────────
 def build_embed_twitch(membro, dados, mention):
-    embed = discord.Embed(
-        color=0x9146FF,  # roxo Twitch
-        timestamp=datetime.utcnow()
-    )
+    embed = discord.Embed(color=0x9146FF, timestamp=datetime.utcnow())
     embed.description = (
         f"🟣 **TEM LIVE ACONTECENDO NA TWITCH:**\n\n"
         f"**{membro.display_name}** está ao vivo na roxinha 🟪🟪🟪\n"
@@ -101,10 +163,7 @@ def build_embed_twitch(membro, dados, mention):
 
 
 def build_embed_youtube_live(membro, dados, mention):
-    embed = discord.Embed(
-        color=0xFF0000,  # vermelho vivo YouTube
-        timestamp=datetime.utcnow()
-    )
+    embed = discord.Embed(color=0xFF0000, timestamp=datetime.utcnow())
     embed.description = (
         f"🔴 **LIVE NO YOUTUBE AGORA. CORRE LÁ PRA VER:**\n\n"
         f"**{membro.display_name}** está ao vivo e operante. 🟥🟥🟥\n"
@@ -119,20 +178,22 @@ def build_embed_youtube_live(membro, dados, mention):
     return embed
 
 
-def build_embed_youtube_video(membro, dados, mention):
-    embed = discord.Embed(
-        color=0x3B82F6,  # azul 🩵
-        timestamp=datetime.utcnow()
-    )
+def build_embed_youtube_video(nome, dados, mention, avatar_url=None):
+    embed = discord.Embed(color=0x3B82F6, timestamp=datetime.utcnow())
     embed.description = (
         f"🔵 **ACABOU DE SAIR VÍDEO NOVINHO EM FOLHA:**\n\n"
-        f"**{membro.display_name}** postou um vídeo novo agora em seu canal. 🟦🟦🟦\n"
+        f"**{nome}** postou um vídeo novo agora em seu canal. 🟦🟦🟦\n"
         f"Assista o vídeo, curta, comente, se inscreva (se não for inscrito) e apoie um criador de conteúdo da nossa comunidade. 🩵🩵🩵🩵🩵\n\n"
         f"**🎥 {dados['titulo']}**\n\n"
         f"[▶️ Clique aqui para assistir!]({dados['url']})\n\n"
         f"{mention}"
     )
-    embed.set_author(name=membro.display_name, icon_url=membro.display_avatar.url)
+    if avatar_url:
+        embed.set_author(name=nome, icon_url=avatar_url)
+    else:
+        embed.set_author(name=nome)
+    if dados.get("thumb"):
+        embed.set_image(url=dados["thumb"])
     embed.set_footer(text="YouTube Vídeo")
     return embed
 
@@ -146,17 +207,67 @@ def get_mention(guild, plataforma):
     role = guild.get_role(role_id)
     return role.mention if role else ""
 
-def gerar_chave(membro_id, plataforma, dados):
+def gerar_chave_live(membro_id, plataforma, dados):
     url = dados.get("url", "") or dados.get("titulo", "")
     return f"{membro_id}:{plataforma}:{url}"
 
 # ─────────────────────────────────────────
-#  EVENTOS
+#  TASK: CHECAR VÍDEOS NOVOS (a cada 5 min)
+# ─────────────────────────────────────────
+@tasks.loop(minutes=5)
+async def checar_videos():
+    await bot.wait_until_ready()
+
+    guild = bot.guilds[0] if bot.guilds else None
+    if not guild:
+        return
+
+    canal = guild.get_channel(CANAL_DIVULGACAO_ID)
+    if not canal:
+        return
+
+    mention = get_mention(guild, "youtube_video")
+    canais  = get_canais_youtube()
+
+    async with aiohttp.ClientSession() as session:
+        for entrada in canais:
+            channel_id     = entrada["channel_id"]
+            nome           = entrada["nome"]
+            discord_uid    = entrada["discord_user_id"]
+
+            video = await buscar_ultimo_video(session, channel_id)
+            if not video or not video["id"]:
+                continue
+
+            # Já postou esse vídeo?
+            if videos_vistos.get(channel_id) == video["id"]:
+                continue
+
+            videos_vistos[channel_id] = video["id"]
+            salvar_json(VIDEOS_VISTOS_FILE, videos_vistos)
+
+            # Tenta pegar avatar do membro no servidor
+            avatar_url = None
+            try:
+                membro = guild.get_member(int(discord_uid))
+                if membro:
+                    avatar_url = membro.display_avatar.url
+                    nome = membro.display_name
+            except Exception:
+                pass
+
+            embed = build_embed_youtube_video(nome, video, mention, avatar_url)
+            await canal.send(embed=embed)
+            print(f"📹 Vídeo novo postado: {nome} — {video['titulo']}")
+
+# ─────────────────────────────────────────
+#  EVENTOS DE LIVES
 # ─────────────────────────────────────────
 @bot.event
 async def on_ready():
     print(f"✅ Bot online como {bot.user} ({bot.user.id})")
     print(f"   Servidores: {[g.name for g in bot.guilds]}")
+    checar_videos.start()
 
 
 @bot.event
@@ -166,8 +277,7 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
     if not canal:
         return
 
-    # ── Cargo STREAMANDO AGORA ────────────────────────────────────────
-    cargo_stream = discord.utils.get(guild.roles, name=CARGO_STREAMANDO_NOME)
+    cargo_stream      = discord.utils.get(guild.roles, name=CARGO_STREAMANDO_NOME)
     estava_streamando = any(isinstance(a, discord.Streaming) for a in before.activities)
     esta_streamando   = any(isinstance(a, discord.Streaming) for a in after.activities)
 
@@ -177,7 +287,6 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
         elif estava_streamando and not esta_streamando:
             await after.remove_roles(cargo_stream, reason="Saiu da live")
 
-    # ── Detectar novas atividades ─────────────────────────────────────
     atividades_novas = [a for a in after.activities if a not in before.activities]
 
     for atividade in atividades_novas:
@@ -185,12 +294,12 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
         if not plataforma or not dados:
             continue
 
-        chave = gerar_chave(after.id, plataforma, dados)
+        chave = gerar_chave_live(after.id, plataforma, dados)
         if chave in lives_ativas:
             continue
 
         lives_ativas[chave] = True
-        salvar_lives(lives_ativas)
+        salvar_json(LIVES_ATIVAS_FILE, lives_ativas)
 
         mention = get_mention(guild, plataforma)
 
@@ -198,19 +307,16 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
             embed = build_embed_twitch(after, dados, mention)
         elif plataforma == "youtube_live":
             embed = build_embed_youtube_live(after, dados, mention)
-        elif plataforma == "youtube_video":
-            embed = build_embed_youtube_video(after, dados, mention)
         else:
             continue
 
         await canal.send(embed=embed)
 
-    # ── Limpar chaves ao encerrar live ────────────────────────────────
     if estava_streamando and not esta_streamando:
         chaves_remover = [k for k in lives_ativas if k.startswith(f"{after.id}:")]
         for k in chaves_remover:
             del lives_ativas[k]
-        salvar_lives(lives_ativas)
+        salvar_json(LIVES_ATIVAS_FILE, lives_ativas)
 
 
 # ─────────────────────────────────────────
