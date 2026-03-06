@@ -16,8 +16,15 @@ GOOGLE_CREDS_JSON    = os.environ.get("GOOGLE_CREDS_JSON")  # JSON das credencia
 SPREADSHEET_ID       = os.environ.get("SPREADSHEET_ID")     # ID da planilha
 SHEET_RANGE          = "YouTube!A2:C"                       # Colunas: Alias | ID no Discord | ID do Canal
 
-CANAL_DIVULGACAO_ID  = 1468613615987851275
+CANAL_DIVULGACAO_ID   = 1468613615987851275
 CARGO_STREAMANDO_NOME = "STREAMANDO AGORA"
+
+# ID do canal de voz "➕ Criar Call" — quem entrar aqui ganha uma call temporária
+# Crie o canal no Discord, copie o ID e adicione como variável CANAL_CRIAR_CALL_ID no Railway
+CANAL_CRIAR_CALL_ID = int(os.environ.get("CANAL_CRIAR_CALL_ID", 0))
+
+# Rastreia canais temporários criados: {canal_id: True}
+canais_temporarios = {}
 
 MENTION_ROLES = {
     "twitch":        1478843698614898688,
@@ -311,6 +318,36 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
         for k in chaves_remover:
             del lives_ativas[k]
         salvar_json(LIVES_ATIVAS_FILE, lives_ativas)
+
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    guild = member.guild
+
+    # ── Usuário entrou no canal "➕ Criar Call" ────────────────────────
+    if after.channel and after.channel.id == CANAL_CRIAR_CALL_ID:
+        # Cria canal temporário na mesma categoria
+        categoria = after.channel.category
+        nome_canal = f"{member.display_name}'s call"
+        novo_canal = await guild.create_voice_channel(
+            name=nome_canal,
+            category=categoria,
+            reason="Call temporária criada pelo bot"
+        )
+        canais_temporarios[novo_canal.id] = True
+        await member.move_to(novo_canal)
+        print(f"✅ Canal temporário criado: {nome_canal}")
+
+    # ── Usuário saiu de algum canal ───────────────────────────────────
+    if before.channel and before.channel.id in canais_temporarios:
+        # Se o canal ficou vazio, deleta
+        if len(before.channel.members) == 0:
+            try:
+                await before.channel.delete(reason="Call temporária vazia")
+                del canais_temporarios[before.channel.id]
+                print(f"🗑️ Canal temporário deletado: {before.channel.name}")
+            except discord.NotFound:
+                pass
 
 
 # ─────────────────────────────────────────
