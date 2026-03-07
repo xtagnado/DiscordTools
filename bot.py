@@ -438,10 +438,13 @@ async def setup_roles(ctx):
             f"{r['emoji']} → {r['descricao']}"
             for r in bloco["reactions"]
         )
-        conteudo = (
-            f"## Reaja aos emotes abaixo para ser notificado sobre as novidades no servidor ##\n\n"
-            f"{linhas}\n\n"
-            f"-# Você receberá o cargo referente à role que reagir ao emote."
+        embed = discord.Embed(
+            description=(
+                f"## Reaja aos emotes abaixo para ser notificado sobre as novidades no servidor ##\n\n"
+                f"{linhas}\n\n"
+                f"-# Você receberá o cargo referente à role que reagir ao emote."
+            ),
+            color=0x99AAB5  # cinza Discord
         )
 
         msg_id = bloco.get("message_id")
@@ -451,14 +454,13 @@ async def setup_roles(ctx):
         if msg_id:
             try:
                 msg = await canal.fetch_message(int(msg_id))
-                await msg.edit(content=conteudo)
+                await msg.edit(content=None, embed=embed)
             except discord.NotFound:
                 msg = None
 
         # Se não existe ainda, posta nova
         if msg is None:
-            msg = await ctx.send(conteudo)
-            # Adiciona as reações só em mensagens novas
+            msg = await ctx.send(embed=embed)
             for r in bloco["reactions"]:
                 emoji = bot.get_emoji(int(r["emoji_id"]))
                 if emoji:
