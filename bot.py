@@ -11,21 +11,15 @@ from googleapiclient.discovery import build
 # ─────────────────────────────────────────
 #  CONFIGURAÇÕES
 # ─────────────────────────────────────────
-TOKEN                = os.environ.get("TOKEN")
-GOOGLE_CREDS_JSON    = os.environ.get("GOOGLE_CREDS_JSON")  # JSON das credenciais como string
-SPREADSHEET_ID       = os.environ.get("SPREADSHEET_ID")     # ID da planilha
-SHEET_RANGE          = "YouTube!A2:C"                       # Colunas: Alias | ID no Discord | ID do Canal
+TOKEN             = os.environ.get("TOKEN")
+GOOGLE_CREDS_JSON = os.environ.get("GOOGLE_CREDS_JSON")
+SPREADSHEET_ID    = os.environ.get("SPREADSHEET_ID")
+SHEET_RANGE       = "YouTube!A2:C"  # Alias | ID no Discord | ID do Canal
 
 CANAL_DIVULGACAO_ID   = 1468613615987851275
 CANAL_CONFIG_ROLES_ID = 1479645122428932198
 CARGO_STREAMANDO_NOME = "STREAMANDO AGORA"
-
-# ID do canal de voz "➕ Criar Call" — quem entrar aqui ganha uma call temporária
-# Crie o canal no Discord, copie o ID e adicione como variável CANAL_CRIAR_CALL_ID no Railway
-CANAL_CRIAR_CALL_ID = int(os.environ.get("CANAL_CRIAR_CALL_ID", 0))
-
-# Rastreia canais temporários criados: {canal_id: True}
-canais_temporarios = {}
+CANAL_CRIAR_CALL_ID   = int(os.environ.get("CANAL_CRIAR_CALL_ID", 0))
 
 MENTION_ROLES = {
     "twitch":        1478843698614898688,
@@ -49,15 +43,15 @@ def salvar_json(path, data):
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
 
-lives_ativas  = carregar_json(LIVES_ATIVAS_FILE)
-videos_vistos = carregar_json(VIDEOS_VISTOS_FILE)
-primeira_checagem = True  # Na primeira rodada só registra, não posta
+lives_ativas      = carregar_json(LIVES_ATIVAS_FILE)
+videos_vistos     = carregar_json(VIDEOS_VISTOS_FILE)
+canais_temporarios = {}
+primeira_checagem = True
 
 # ─────────────────────────────────────────
 #  REACTION ROLES
 # ─────────────────────────────────────────
 def carregar_reaction_roles():
-    """Lê reaction_roles.json e monta dict {message_id: {emoji_id: role_id}}"""
     if not os.path.exists("reaction_roles.json"):
         return {}
     with open("reaction_roles.json", "r") as f:
@@ -78,7 +72,6 @@ reaction_roles_map = carregar_reaction_roles()
 #  GOOGLE SHEETS
 # ─────────────────────────────────────────
 def get_canais_youtube():
-    """Lê a planilha e retorna lista de dicts com discord_user_id, nome, channel_id."""
     try:
         creds_info = json.loads(GOOGLE_CREDS_JSON)
         creds = Credentials.from_service_account_info(
@@ -86,18 +79,18 @@ def get_canais_youtube():
             scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
         )
         service = build("sheets", "v4", credentials=creds)
-        result = service.spreadsheets().values().get(
+        result  = service.spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID,
             range=SHEET_RANGE
         ).execute()
-        rows = result.get("values", [])
+        rows   = result.get("values", [])
         canais = []
         for row in rows:
             if len(row) >= 3:
                 canais.append({
-                    "nome":            row[0].strip(),  # Alias
-                    "discord_user_id": row[1].strip(),  # ID no Discord
-                    "channel_id":      row[2].strip(),  # ID do Canal
+                    "nome":            row[0].strip(),
+                    "discord_user_id": row[1].strip(),
+                    "channel_id":      row[2].strip(),
                 })
         return canais
     except Exception as e:
@@ -108,7 +101,6 @@ def get_canais_youtube():
 #  RSS YOUTUBE
 # ─────────────────────────────────────────
 async def buscar_ultimo_video(session, channel_id):
-    """Retorna o vídeo mais recente do canal via RSS."""
     url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
@@ -144,8 +136,9 @@ async def buscar_ultimo_video(session, channel_id):
 #  SETUP DO BOT
 # ─────────────────────────────────────────
 intents = discord.Intents.default()
-intents.members   = True
-intents.presences = True
+intents.members        = True
+intents.presences      = True
+intents.message_content = True  # necessário para comandos com prefixo
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -155,9 +148,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 def detectar_plataforma(activity):
     if not isinstance(activity, discord.Streaming):
         return None, None
-
     url = (activity.url or "").lower()
-
     if "twitch.tv" in url:
         return "twitch", {
             "titulo": activity.name or "Live sem título",
@@ -170,7 +161,6 @@ def detectar_plataforma(activity):
             "url":    activity.url,
             "jogo":   activity.game or "Nenhuma categoria",
         }
-
     return None, None
 
 # ─────────────────────────────────────────
@@ -243,11 +233,11 @@ async def checar_videos():
     global primeira_checagem
     await bot.wait_until_ready()
 
-    guild = bot.guilds[0] if bot.guilds else None
+    guild  = bot.guilds[0] if bot.guilds else None
     if not guild:
         return
 
-    canal  = guild.get_channel(CANAL_DIVULGACAO_ID)
+    canal   = guild.get_channel(CANAL_DIVULGACAO_ID)
     mention = get_mention(guild, "youtube_video")
     canais  = get_canais_youtube()
 
@@ -261,7 +251,6 @@ async def checar_videos():
             if not video or not video["id"]:
                 continue
 
-            # Já postou esse vídeo?
             if videos_vistos.get(channel_id) == video["id"]:
                 continue
 
@@ -277,7 +266,6 @@ async def checar_videos():
             if not canal:
                 continue
 
-            # Tenta pegar avatar do membro no servidor
             avatar_url = None
             try:
                 membro = guild.get_member(int(discord_uid))
@@ -294,7 +282,7 @@ async def checar_videos():
     primeira_checagem = False
 
 # ─────────────────────────────────────────
-#  EVENTOS DE LIVES
+#  EVENTOS
 # ─────────────────────────────────────────
 @bot.event
 async def on_ready():
@@ -356,10 +344,9 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
 async def on_voice_state_update(member, before, after):
     guild = member.guild
 
-    # ── Usuário entrou no canal "➕ Criar Call" ────────────────────────
+    # Usuário entrou no canal "➕ Criar Call"
     if after.channel and after.channel.id == CANAL_CRIAR_CALL_ID:
-        # Cria canal temporário na mesma categoria
-        categoria = after.channel.category
+        categoria  = after.channel.category
         nome_canal = f"{member.display_name}'s call"
         novo_canal = await guild.create_voice_channel(
             name=nome_canal,
@@ -370,9 +357,8 @@ async def on_voice_state_update(member, before, after):
         await member.move_to(novo_canal)
         print(f"✅ Canal temporário criado: {nome_canal}")
 
-    # ── Usuário saiu de algum canal ───────────────────────────────────
+    # Usuário saiu de um canal temporário
     if before.channel and before.channel.id in canais_temporarios:
-        # Se o canal ficou vazio, deleta
         if len(before.channel.members) == 0:
             try:
                 await before.channel.delete(reason="Call temporária vazia")
@@ -382,12 +368,10 @@ async def on_voice_state_update(member, before, after):
                 pass
 
 
-
 # ─────────────────────────────────────────
-#  REACTION ROLES — EVENTOS
+#  REACTION ROLES
 # ─────────────────────────────────────────
 async def handle_reaction(payload, adicionar: bool):
-    """Dá ou remove role baseado na reação."""
     global reaction_roles_map
     reaction_roles_map = carregar_reaction_roles()
 
@@ -431,21 +415,23 @@ async def on_raw_reaction_remove(payload):
 
 # ─────────────────────────────────────────
 #  COMANDO: !setup_roles
-#  Posta as mensagens de reaction roles e
-#  salva os IDs no reaction_roles.json
+#  Posta as mensagens de reaction roles no
+#  canal de config. Só admins podem usar.
+#  IMPORTANTE: após rodar, o reaction_roles.json
+#  será atualizado com os message_ids — suba
+#  o arquivo atualizado no GitHub em seguida.
 # ─────────────────────────────────────────
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setup_roles(ctx):
     if ctx.channel.id != CANAL_CONFIG_ROLES_ID:
-        await ctx.send("❌ Use esse comando no canal de configuração de roles.")
+        await ctx.send("❌ Use esse comando no canal de configuração de roles.", delete_after=5)
         return
 
     with open("reaction_roles.json", "r") as f:
         data = json.load(f)
 
     for i, bloco in enumerate(data["mensagens"]):
-        # Monta o texto do embed
         embed = discord.Embed(
             title=f"📋 {bloco['descricao']}",
             description="\n".join(
@@ -457,20 +443,24 @@ async def setup_roles(ctx):
         embed.set_footer(text="Reaja para receber ou remover a role!")
         msg = await ctx.send(embed=embed)
 
-        # Adiciona as reações automaticamente
         for r in bloco["reactions"]:
             emoji = bot.get_emoji(int(r["emoji_id"]))
             if emoji:
                 await msg.add_reaction(emoji)
 
-        # Salva o message_id no JSON
         data["mensagens"][i]["message_id"] = str(msg.id)
 
+    # Salva localmente e imprime o JSON atualizado no log
     with open("reaction_roles.json", "w") as f:
         json.dump(data, f, indent=2)
 
     await ctx.message.delete()
+
+    # Imprime o JSON atualizado nos logs do Railway
+    # Copie e substitua no seu reaction_roles.json no GitHub!
     print("✅ Reaction roles configurados!")
+    print("📋 Copie o JSON abaixo e atualize no GitHub:")
+    print(json.dumps(data, indent=2))
 
 
 # ─────────────────────────────────────────
