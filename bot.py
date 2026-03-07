@@ -17,6 +17,7 @@ SPREADSHEET_ID       = os.environ.get("SPREADSHEET_ID")     # ID da planilha
 SHEET_RANGE          = "YouTube!A2:C"                       # Colunas: Alias | ID no Discord | ID do Canal
 
 CANAL_DIVULGACAO_ID   = 1468613615987851275
+CANAL_CONFIG_ROLES_ID = 1479645122428932198
 CARGO_STREAMANDO_NOME = "STREAMANDO AGORA"
 
 # ID do canal de voz "➕ Criar Call" — quem entrar aqui ganha uma call temporária
@@ -50,6 +51,28 @@ def salvar_json(path, data):
 
 lives_ativas  = carregar_json(LIVES_ATIVAS_FILE)
 videos_vistos = carregar_json(VIDEOS_VISTOS_FILE)
+primeira_checagem = True  # Na primeira rodada só registra, não posta
+
+# ─────────────────────────────────────────
+#  REACTION ROLES
+# ─────────────────────────────────────────
+def carregar_reaction_roles():
+    """Lê reaction_roles.json e monta dict {message_id: {emoji_id: role_id}}"""
+    if not os.path.exists("reaction_roles.json"):
+        return {}
+    with open("reaction_roles.json", "r") as f:
+        data = json.load(f)
+    mapping = {}
+    for msg in data.get("mensagens", []):
+        msg_id = msg.get("message_id")
+        if not msg_id:
+            continue
+        mapping[int(msg_id)] = {
+            r["emoji_id"]: r["role_id"] for r in msg.get("reactions", [])
+        }
+    return mapping
+
+reaction_roles_map = carregar_reaction_roles()
 
 # ─────────────────────────────────────────
 #  GOOGLE SHEETS
@@ -217,24 +240,22 @@ def gerar_chave_live(membro_id, plataforma, dados):
 # ─────────────────────────────────────────
 @tasks.loop(minutes=5)
 async def checar_videos():
+    global primeira_checagem
     await bot.wait_until_ready()
 
     guild = bot.guilds[0] if bot.guilds else None
     if not guild:
         return
 
-    canal = guild.get_channel(CANAL_DIVULGACAO_ID)
-    if not canal:
-        return
-
+    canal  = guild.get_channel(CANAL_DIVULGACAO_ID)
     mention = get_mention(guild, "youtube_video")
     canais  = get_canais_youtube()
 
     async with aiohttp.ClientSession() as session:
         for entrada in canais:
-            channel_id     = entrada["channel_id"]
-            nome           = entrada["nome"]
-            discord_uid    = entrada["discord_user_id"]
+            channel_id  = entrada["channel_id"]
+            nome        = entrada["nome"]
+            discord_uid = entrada["discord_user_id"]
 
             video = await buscar_ultimo_video(session, channel_id)
             if not video or not video["id"]:
@@ -244,8 +265,17 @@ async def checar_videos():
             if videos_vistos.get(channel_id) == video["id"]:
                 continue
 
+            # Primeira checagem: só registra, não posta
+            if primeira_checagem:
+                videos_vistos[channel_id] = video["id"]
+                salvar_json(VIDEOS_VISTOS_FILE, videos_vistos)
+                continue
+
             videos_vistos[channel_id] = video["id"]
             salvar_json(VIDEOS_VISTOS_FILE, videos_vistos)
+
+            if not canal:
+                continue
 
             # Tenta pegar avatar do membro no servidor
             avatar_url = None
@@ -260,6 +290,8 @@ async def checar_videos():
             embed = build_embed_youtube_video(nome, video, mention, avatar_url)
             await canal.send(embed=embed)
             print(f"📹 Vídeo novo postado: {nome} — {video['titulo']}")
+
+    primeira_checagem = False
 
 # ─────────────────────────────────────────
 #  EVENTOS DE LIVES
@@ -348,6 +380,97 @@ async def on_voice_state_update(member, before, after):
                 print(f"🗑️ Canal temporário deletado: {before.channel.name}")
             except discord.NotFound:
                 pass
+
+
+
+# ─────────────────────────────────────────
+#  REACTION ROLES — EVENTOS
+# ─────────────────────────────────────────
+async def handle_reaction(payload, adicionar: bool):
+    """Dá ou remove role baseado na reação."""
+    global reaction_roles_map
+    reaction_roles_map = carregar_reaction_roles()
+
+    msg_map = reaction_roles_map.get(payload.message_id)
+    if not msg_map:
+        return
+
+    emoji_id = str(payload.emoji.id) if payload.emoji.id else payload.emoji.name
+    role_id  = msg_map.get(emoji_id)
+    if not role_id:
+        return
+
+    guild  = bot.get_guild(payload.guild_id)
+    member = guild.get_member(payload.user_id)
+    role   = guild.get_role(role_id)
+
+    if not member or not role or member.bot:
+        return
+
+    if adicionar:
+        await member.add_roles(role, reason="Reaction role")
+        print(f"✅ Role '{role.name}' adicionada a {member.display_name}")
+    else:
+        await member.remove_roles(role, reason="Reaction role removida")
+        print(f"❌ Role '{role.name}' removida de {member.display_name}")
+
+
+@bot.event
+async def on_raw_reaction_add(payload):
+    if payload.channel_id != CANAL_CONFIG_ROLES_ID:
+        return
+    await handle_reaction(payload, adicionar=True)
+
+
+@bot.event
+async def on_raw_reaction_remove(payload):
+    if payload.channel_id != CANAL_CONFIG_ROLES_ID:
+        return
+    await handle_reaction(payload, adicionar=False)
+
+
+# ─────────────────────────────────────────
+#  COMANDO: !setup_roles
+#  Posta as mensagens de reaction roles e
+#  salva os IDs no reaction_roles.json
+# ─────────────────────────────────────────
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def setup_roles(ctx):
+    if ctx.channel.id != CANAL_CONFIG_ROLES_ID:
+        await ctx.send("❌ Use esse comando no canal de configuração de roles.")
+        return
+
+    with open("reaction_roles.json", "r") as f:
+        data = json.load(f)
+
+    for i, bloco in enumerate(data["mensagens"]):
+        # Monta o texto do embed
+        embed = discord.Embed(
+            title=f"📋 {bloco['descricao']}",
+            description="\n".join(
+                f"{r['emoji']} → <@&{r['role_id']}>"
+                for r in bloco["reactions"]
+            ),
+            color=0x5865F2
+        )
+        embed.set_footer(text="Reaja para receber ou remover a role!")
+        msg = await ctx.send(embed=embed)
+
+        # Adiciona as reações automaticamente
+        for r in bloco["reactions"]:
+            emoji = bot.get_emoji(int(r["emoji_id"]))
+            if emoji:
+                await msg.add_reaction(emoji)
+
+        # Salva o message_id no JSON
+        data["mensagens"][i]["message_id"] = str(msg.id)
+
+    with open("reaction_roles.json", "w") as f:
+        json.dump(data, f, indent=2)
+
+    await ctx.message.delete()
+    print("✅ Reaction roles configurados!")
 
 
 # ─────────────────────────────────────────
