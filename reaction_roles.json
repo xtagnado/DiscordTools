@@ -22,6 +22,17 @@
           "descricao": "Ser notificado sempre que um vídeo novo for postado."
         }
       ]
+    },
+    {
+      "descricao": "Criadores",
+      "reactions": [
+        {
+          "emoji": "<:UdonLike:1086254234242125834>",
+          "emoji_id": "1086254234242125834",
+          "role_id": 1479785447713538168,
+          "descricao": "Seguir o Udon / Rebuildando."
+        }
+      ]
     }
   ]
 }
