@@ -56,9 +56,14 @@ def carregar_reaction_roles():
         return {}
     with open("reaction_roles.json", "r") as f:
         data = json.load(f)
+
+    # Busca os message_ids salvos na planilha
+    ids_planilha = get_message_ids()
+
     mapping = {}
-    for msg in data.get("mensagens", []):
-        msg_id = msg.get("message_id")
+    for i, msg in enumerate(data.get("mensagens", [])):
+        chave  = f"message_id_{i}"
+        msg_id = ids_planilha.get(chave) or msg.get("message_id")
         if not msg_id:
             continue
         mapping[int(msg_id)] = {
@@ -71,14 +76,17 @@ reaction_roles_map = carregar_reaction_roles()
 # ─────────────────────────────────────────
 #  GOOGLE SHEETS
 # ─────────────────────────────────────────
+def get_sheets_service(readonly=True):
+    creds_info = json.loads(GOOGLE_CREDS_JSON)
+    scope = ["https://www.googleapis.com/auth/spreadsheets.readonly"] if readonly else \
+            ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = Credentials.from_service_account_info(creds_info, scopes=scope)
+    return build("sheets", "v4", credentials=creds)
+
+
 def get_canais_youtube():
     try:
-        creds_info = json.loads(GOOGLE_CREDS_JSON)
-        creds = Credentials.from_service_account_info(
-            creds_info,
-            scopes=["https://www.googleapis.com/auth/spreadsheets.readonly"]
-        )
-        service = build("sheets", "v4", credentials=creds)
+        service = get_sheets_service(readonly=True)
         result  = service.spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID,
             range=SHEET_RANGE
@@ -96,6 +104,56 @@ def get_canais_youtube():
     except Exception as e:
         print(f"❌ Erro ao ler planilha: {e}")
         return []
+
+
+def get_message_ids():
+    """Lê os message_ids da aba IDMensagens. Retorna dict {chave: message_id}"""
+    try:
+        service = get_sheets_service(readonly=True)
+        result  = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="IDMensagens!A2:B"
+        ).execute()
+        rows = result.get("values", [])
+        return {row[0]: row[1] for row in rows if len(row) >= 2}
+    except Exception as e:
+        print(f"❌ Erro ao ler IDMensagens: {e}")
+        return {}
+
+
+def save_message_id(chave, message_id):
+    """Salva ou atualiza um message_id na aba IDMensagens."""
+    try:
+        service = get_sheets_service(readonly=False)
+
+        # Lê as chaves existentes para ver se já existe
+        result = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="IDMensagens!A2:A"
+        ).execute()
+        rows  = result.get("values", [])
+        chaves = [r[0] for r in rows if r]
+
+        if chave in chaves:
+            linha = chaves.index(chave) + 2  # +2 por causa do header
+            service.spreadsheets().values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"IDMensagens!B{linha}",
+                valueInputOption="RAW",
+                body={"values": [[str(message_id)]]}
+            ).execute()
+        else:
+            service.spreadsheets().values().append(
+                spreadsheetId=SPREADSHEET_ID,
+                range="IDMensagens!A:B",
+                valueInputOption="RAW",
+                insertDataOption="INSERT_ROWS",
+                body={"values": [[chave, str(message_id)]]}
+            ).execute()
+
+        print(f"✅ message_id salvo na planilha: {chave} = {message_id}")
+    except Exception as e:
+        print(f"❌ Erro ao salvar IDMensagens: {e}")
 
 # ─────────────────────────────────────────
 #  RSS YOUTUBE
@@ -414,13 +472,14 @@ async def on_raw_reaction_remove(payload):
 
 
 # ─────────────────────────────────────────
-#  COMANDO: !setup_roles
-#  Posta as mensagens de reaction roles no
-#  canal de config. Só admins podem usar.
-#  IMPORTANTE: após rodar, o reaction_roles.json
-#  será atualizado com os message_ids — suba
-#  o arquivo atualizado no GitHub em seguida.
+#  COMMAND: !setup_roles
 # ─────────────────────────────────────────
+# Títulos por índice de bloco
+TITULOS_BLOCOS = {
+    0: "## NOTIFICAÇÕES ##",
+    1: "## Criadores de conteúdo ##\n### Para ver os canais de comunicação específicos desses canais ###",
+}
+
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setup_roles(ctx):
@@ -434,23 +493,24 @@ async def setup_roles(ctx):
     canal = bot.get_channel(CANAL_CONFIG_ROLES_ID)
 
     for i, bloco in enumerate(data["mensagens"]):
+        titulo = TITULOS_BLOCOS.get(i, f"## {bloco['descricao']} ##")
         linhas = "\n".join(
             f"{r['emoji']} → {r['descricao']}"
             for r in bloco["reactions"]
         )
         embed = discord.Embed(
             description=(
-                f"## Reaja aos emotes abaixo para ser notificado sobre as novidades no servidor ##\n\n"
+                f"{titulo}\n\n"
                 f"{linhas}\n\n"
                 f"-# Você receberá o cargo referente à role que reagir ao emote."
             ),
-            color=0x99AAB5  # cinza Discord
+            color=0x99AAB5
         )
 
         msg_id = bloco.get("message_id")
-        msg = None
+        msg    = None
 
-        # Tenta editar a mensagem existente
+        # Tenta editar mensagem existente
         if msg_id:
             try:
                 msg = await canal.fetch_message(int(msg_id))
@@ -458,7 +518,7 @@ async def setup_roles(ctx):
             except discord.NotFound:
                 msg = None
 
-        # Se não existe ainda, posta nova
+        # Posta nova se não existir
         if msg is None:
             msg = await ctx.send(embed=embed)
             for r in bloco["reactions"]:
@@ -466,24 +526,14 @@ async def setup_roles(ctx):
                 if emoji:
                     await msg.add_reaction(emoji)
 
-        for r in bloco["reactions"]:
-            emoji = bot.get_emoji(int(r["emoji_id"]))
-            if emoji:
-                await msg.add_reaction(emoji)
-
         data["mensagens"][i]["message_id"] = str(msg.id)
+        save_message_id(f"message_id_{i}", msg.id)
 
-    # Salva localmente e imprime o JSON atualizado no log
     with open("reaction_roles.json", "w") as f:
         json.dump(data, f, indent=2)
 
     await ctx.message.delete()
-
-    # Imprime o JSON atualizado nos logs do Railway
-    # Copie e substitua no seu reaction_roles.json no GitHub!
-    print("✅ Reaction roles configurados!")
-    print("📋 Copie o JSON abaixo e atualize no GitHub:")
-    print(json.dumps(data, indent=2))
+    print("✅ Reaction roles configurados e message_ids salvos na planilha!")
 
 
 # ─────────────────────────────────────────
