@@ -71,7 +71,8 @@ def carregar_reaction_roles():
         }
     return mapping
 
-reaction_roles_map = carregar_reaction_roles()
+# reaction_roles_map será carregado no on_ready, após as funções do Sheets estarem definidas
+reaction_roles_map = {}
 
 # ─────────────────────────────────────────
 #  GOOGLE SHEETS
@@ -344,8 +345,10 @@ async def checar_videos():
 # ─────────────────────────────────────────
 @bot.event
 async def on_ready():
+    global reaction_roles_map
     print(f"✅ Bot online como {bot.user} ({bot.user.id})")
     print(f"   Servidores: {[g.name for g in bot.guilds]}")
+    reaction_roles_map = carregar_reaction_roles()
     checar_videos.start()
 
 
