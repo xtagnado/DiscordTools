@@ -6,17 +6,20 @@
         {
           "emoji": "<:Twitch:1479643900892418221>",
           "emoji_id": "1479643900892418221",
-          "role_id": 1478843698614898688
+          "role_id": 1478843698614898688,
+          "descricao": "Saber quem entrou em live na Twitch."
         },
         {
           "emoji": "<:YTLive:1479643951626584244>",
           "emoji_id": "1479643951626584244",
-          "role_id": 1478843587914498118
+          "role_id": 1478843587914498118,
+          "descricao": "Saber quem entrou em live no Youtube."
         },
         {
           "emoji": "<:YTVideos:1479643995671105576>",
           "emoji_id": "1479643995671105576",
-          "role_id": 1478843428937666580
+          "role_id": 1478843428937666580,
+          "descricao": "Ser notificado sempre que um vídeo novo for postado."
         }
       ]
     }
