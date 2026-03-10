@@ -445,19 +445,34 @@ async def limpar_cargos_presos():
     if not cargo_stream:
         return
 
+    # Monta dict de discord_user_id → channel_id para checar live YT por membro
+    canais_por_membro = {}
+    try:
+        canais = get_canais_youtube()
+        for entrada in canais:
+            try:
+                uid = int(entrada["discord_user_id"])
+                canais_por_membro[uid] = entrada["channel_id"]
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     for membro in cargo_stream.members:
+        # Bots nunca devem ter o cargo
         if membro.bot:
             await membro.remove_roles(cargo_stream, reason="Bot não deve ter cargo de streaming")
             print(f"🧹 Cargo removido do bot: {membro.display_name}")
             continue
 
-        esta_streamando = any(isinstance(a, discord.Streaming) for a in membro.activities)
-        em_live_yt = any(
-            lives_yt_ativas.get(ch) == "live"
-            for ch in lives_yt_ativas
-        )
+        # Checa se está em live na Twitch via presença
+        esta_streamando_twitch = any(isinstance(a, discord.Streaming) for a in membro.activities)
 
-        if not esta_streamando and not em_live_yt:
+        # Checa se está em live no YouTube via RSS
+        channel_id    = canais_por_membro.get(membro.id)
+        em_live_yt    = lives_yt_ativas.get(channel_id) == "live" if channel_id else False
+
+        if not esta_streamando_twitch and not em_live_yt:
             await membro.remove_roles(cargo_stream, reason="Não está mais streamando")
             print(f"🧹 Cargo STREAMANDO AGORA removido (preso): {membro.display_name}")
 
