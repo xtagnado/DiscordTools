@@ -159,7 +159,9 @@ def save_message_id(chave, message_id):
 # ─────────────────────────────────────────
 #  RSS YOUTUBE
 # ─────────────────────────────────────────
-async def buscar_ultimo_video(session, channel_id):
+async def buscar_ultimo_conteudo(session, channel_id):
+    """Retorna o conteúdo mais recente do canal via RSS.
+    Detecta se é live ativa, live encerrada ou vídeo normal."""
     url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
@@ -176,20 +178,52 @@ async def buscar_ultimo_video(session, channel_id):
             if entry is None:
                 return None
 
-            video_id  = entry.find("yt:videoId", ns)
-            titulo    = entry.find("atom:title", ns)
-            link      = entry.find("atom:link", ns)
-            thumb_url = f"https://img.youtube.com/vi/{video_id.text}/maxresdefault.jpg" if video_id is not None else None
+            video_id = entry.find("yt:videoId", ns)
+            titulo   = entry.find("atom:title", ns)
+            link     = entry.find("atom:link", ns)
+
+            if video_id is None:
+                return None
+
+            vid_id    = video_id.text
+            thumb_url = f"https://img.youtube.com/vi/{vid_id}/maxresdefault.jpg"
+            vid_url   = link.attrib.get("href", "") if link is not None else f"https://www.youtube.com/watch?v={vid_id}"
+
+            # Verifica se é live ativa consultando a thumbnail especial
+            # YouTube usa /vi/{id}/maxresdefault.jpg para lives também,
+            # mas podemos checar via oEmbed se é live
+            is_live = await checar_se_live(session, vid_id)
 
             return {
-                "id":    video_id.text if video_id is not None else None,
-                "titulo": titulo.text if titulo is not None else "Vídeo sem título",
-                "url":   link.attrib.get("href", "") if link is not None else "",
-                "thumb": thumb_url,
+                "id":     vid_id,
+                "titulo": titulo.text if titulo is not None else "Sem título",
+                "url":    vid_url,
+                "thumb":  thumb_url,
+                "is_live": is_live,
             }
     except Exception as e:
         print(f"❌ Erro RSS canal {channel_id}: {e}")
         return None
+
+
+async def checar_se_live(session, video_id):
+    """Checa se o vídeo é uma live ativa pela thumbnail especial do YouTube.
+    Lives ativas têm a thumbnail _live.jpg disponível."""
+    url = f"https://img.youtube.com/vi/{video_id}/maxres2.jpg"
+    try:
+        # YouTube retorna uma thumbnail especial para lives ativas
+        # Checamos via a página do vídeo se contém indicador de live
+        page_url = f"https://www.youtube.com/watch?v={video_id}"
+        async with session.get(page_url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+            if resp.status != 200:
+                return False
+            text = await resp.text()
+            # Se a página contém "isLiveBroadcast" e "startDate" sem "endDate" = live ativa
+            is_broadcast = '"isLiveBroadcast"' in text
+            has_ended    = '"endDate"' in text
+            return is_broadcast and not has_ended
+    except Exception:
+        return False
 
 # ─────────────────────────────────────────
 #  SETUP DO BOT
@@ -253,6 +287,24 @@ def build_embed_youtube_live(membro, dados, mention):
     return embed
 
 
+def build_embed_youtube_live_rss(nome, dados, mention, avatar_url=None):
+    embed = discord.Embed(color=0xFF0000, timestamp=datetime.utcnow())
+    embed.description = (
+        f"🔴 **LIVE NO YOUTUBE AGORA. CORRE LÁ PRA VER:**\n\n"
+        f"**{nome}** está ao vivo e operante. 🟥🟥🟥\n"
+        f"Bora lá assistir esse conteúdo, se inscrever e apoiar o pessoal da nossa comunidade. ❤️❤️❤️❤️❤️\n\n"
+        f"**🎬 [{dados['titulo']}]({dados['url']})**\n\n"
+        f"{mention}"
+    )
+    if avatar_url:
+        embed.set_author(name=nome, icon_url=avatar_url)
+    else:
+        embed.set_author(name=nome)
+    if dados.get("thumb"):
+        embed.set_image(url=dados["thumb"])
+    return embed
+
+
 def build_embed_youtube_video(nome, dados, mention, avatar_url=None):
     embed = discord.Embed(color=0x3B82F6, timestamp=datetime.utcnow())
     embed.description = (
@@ -287,18 +339,23 @@ def gerar_chave_live(membro_id, plataforma, dados):
 # ─────────────────────────────────────────
 #  TASK: CHECAR VÍDEOS NOVOS (a cada 5 min)
 # ─────────────────────────────────────────
+LIVES_YT_ATIVAS_FILE = "lives_yt_ativas.json"
+lives_yt_ativas = carregar_json(LIVES_YT_ATIVAS_FILE)
+
 @tasks.loop(minutes=5)
 async def checar_videos():
-    global primeira_checagem
+    global primeira_checagem, lives_yt_ativas
     await bot.wait_until_ready()
 
     guild  = bot.guilds[0] if bot.guilds else None
     if not guild:
         return
 
-    canal   = guild.get_channel(CANAL_DIVULGACAO_ID)
-    mention = get_mention(guild, "youtube_video")
-    canais  = get_canais_youtube()
+    canal         = guild.get_channel(CANAL_DIVULGACAO_ID)
+    mention_video = get_mention(guild, "youtube_video")
+    mention_live  = get_mention(guild, "youtube_live")
+    cargo_stream  = discord.utils.get(guild.roles, name=CARGO_STREAMANDO_NOME)
+    canais        = get_canais_youtube()
 
     async with aiohttp.ClientSession() as session:
         for entrada in canais:
@@ -306,37 +363,60 @@ async def checar_videos():
             nome        = entrada["nome"]
             discord_uid = entrada["discord_user_id"]
 
-            video = await buscar_ultimo_video(session, channel_id)
-            if not video or not video["id"]:
+            conteudo = await buscar_ultimo_conteudo(session, channel_id)
+            if not conteudo or not conteudo["id"]:
                 continue
 
-            if videos_vistos.get(channel_id) == video["id"]:
+            vid_id  = conteudo["id"]
+            is_live = conteudo["is_live"]
+
+            # ── Gerencia cargo STREAMANDO AGORA para YouTube ──────────
+            try:
+                membro = guild.get_member(int(discord_uid))
+            except Exception:
+                membro = None
+
+            if membro and cargo_stream:
+                estava_em_live_yt = lives_yt_ativas.get(channel_id) == "live"
+                if is_live and not estava_em_live_yt:
+                    await membro.add_roles(cargo_stream, reason="YouTube Live iniciada")
+                elif not is_live and estava_em_live_yt:
+                    await membro.remove_roles(cargo_stream, reason="YouTube Live encerrada")
+
+            # Registra estado da live
+            novo_estado = "live" if is_live else "video"
+            lives_yt_ativas[channel_id] = novo_estado
+            salvar_json(LIVES_YT_ATIVAS_FILE, lives_yt_ativas)
+
+            # ── Verifica se já postou esse conteúdo ──────────────────
+            if videos_vistos.get(channel_id) == vid_id:
                 continue
 
             # Primeira checagem: só registra, não posta
             if primeira_checagem:
-                videos_vistos[channel_id] = video["id"]
+                videos_vistos[channel_id] = vid_id
                 salvar_json(VIDEOS_VISTOS_FILE, videos_vistos)
                 continue
 
-            videos_vistos[channel_id] = video["id"]
+            videos_vistos[channel_id] = vid_id
             salvar_json(VIDEOS_VISTOS_FILE, videos_vistos)
 
             if not canal:
                 continue
 
             avatar_url = None
-            try:
-                membro = guild.get_member(int(discord_uid))
-                if membro:
-                    avatar_url = membro.display_avatar.url
-                    nome = membro.display_name
-            except Exception:
-                pass
+            if membro:
+                avatar_url = membro.display_avatar.url
+                nome = membro.display_name
 
-            embed = build_embed_youtube_video(nome, video, mention, avatar_url)
+            if is_live:
+                embed = build_embed_youtube_live_rss(nome, conteudo, mention_live, avatar_url)
+                print(f"🔴 YouTube Live detectada via RSS: {nome} — {conteudo['titulo']}")
+            else:
+                embed = build_embed_youtube_video(nome, conteudo, mention_video, avatar_url)
+                print(f"📹 Vídeo novo postado: {nome} — {conteudo['titulo']}")
+
             await canal.send(embed=embed)
-            print(f"📹 Vídeo novo postado: {nome} — {video['titulo']}")
 
     primeira_checagem = False
 
@@ -350,10 +430,44 @@ async def on_ready():
     print(f"   Servidores: {[g.name for g in bot.guilds]}")
     reaction_roles_map = carregar_reaction_roles()
     checar_videos.start()
+    limpar_cargos_presos.start()
+
+
+@tasks.loop(minutes=10)
+async def limpar_cargos_presos():
+    """Remove o cargo STREAMANDO AGORA de quem não está mais streamando."""
+    await bot.wait_until_ready()
+    guild = bot.guilds[0] if bot.guilds else None
+    if not guild:
+        return
+
+    cargo_stream = discord.utils.get(guild.roles, name=CARGO_STREAMANDO_NOME)
+    if not cargo_stream:
+        return
+
+    for membro in cargo_stream.members:
+        if membro.bot:
+            await membro.remove_roles(cargo_stream, reason="Bot não deve ter cargo de streaming")
+            print(f"🧹 Cargo removido do bot: {membro.display_name}")
+            continue
+
+        esta_streamando = any(isinstance(a, discord.Streaming) for a in membro.activities)
+        em_live_yt = any(
+            lives_yt_ativas.get(ch) == "live"
+            for ch in lives_yt_ativas
+        )
+
+        if not esta_streamando and not em_live_yt:
+            await membro.remove_roles(cargo_stream, reason="Não está mais streamando")
+            print(f"🧹 Cargo STREAMANDO AGORA removido (preso): {membro.display_name}")
 
 
 @bot.event
 async def on_presence_update(before: discord.Member, after: discord.Member):
+    # Ignora bots
+    if after.bot:
+        return
+
     guild = after.guild
     canal = guild.get_channel(CANAL_DIVULGACAO_ID)
     if not canal:
@@ -364,10 +478,15 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
     esta_streamando   = any(isinstance(a, discord.Streaming) for a in after.activities)
 
     if cargo_stream:
-        if esta_streamando and not estava_streamando:
-            await after.add_roles(cargo_stream, reason="Entrou em live")
-        elif estava_streamando and not esta_streamando:
-            await after.remove_roles(cargo_stream, reason="Saiu da live")
+        try:
+            if esta_streamando and not estava_streamando:
+                await after.add_roles(cargo_stream, reason="Entrou em live")
+                print(f"🎮 Cargo STREAMANDO AGORA adicionado: {after.display_name}")
+            elif estava_streamando and not esta_streamando:
+                await after.remove_roles(cargo_stream, reason="Saiu da live")
+                print(f"🎮 Cargo STREAMANDO AGORA removido: {after.display_name}")
+        except Exception as e:
+            print(f"❌ Erro ao gerenciar cargo de {after.display_name}: {e}")
 
     atividades_novas = [a for a in after.activities if a not in before.activities]
 
