@@ -433,35 +433,39 @@ async def checar_videos():
             lives_yt_ativas[channel_id] = novo_estado
             salvar_json(LIVES_YT_ATIVAS_FILE, lives_yt_ativas)
 
-            # ── Verifica se já postou esse conteúdo ──────────────────
-            if videos_vistos.get(channel_id) == vid_id:
-                continue
-
-            # Primeira checagem: só registra, não posta
-            if primeira_checagem:
-                videos_vistos[channel_id] = vid_id
-                salvar_json(VIDEOS_VISTOS_FILE, videos_vistos)
-                continue
-
-            videos_vistos[channel_id] = vid_id
-            salvar_json(VIDEOS_VISTOS_FILE, videos_vistos)
-
-            if not canal:
-                continue
-
-            avatar_url = None
-            if membro:
-                avatar_url = membro.display_avatar.url
-                nome = membro.display_name
+            # ── Gerencia postagem ─────────────────────────────────────
+            estava_em_live_yt = lives_yt_ativas.get(channel_id) == "live"
 
             if is_live:
-                embed = build_embed_youtube_live_rss(nome, conteudo, mention_live, avatar_url)
-                print(f"🔴 YouTube Live detectada via RSS: {nome} — {conteudo['titulo']}")
+                # Posta live só se acabou de começar (não estava em live antes)
+                if not estava_em_live_yt and not primeira_checagem:
+                    if canal and membro:
+                        mention_live = get_mention(guild, "youtube_live")
+                        avatar_url = membro.display_avatar.url if membro else None
+                        nome_exibir = membro.display_name if membro else nome
+                        embed = build_embed_youtube_live_rss(nome_exibir, conteudo, mention_live, avatar_url)
+                        await canal.send(embed=embed)
+                        print(f"🔴 YouTube Live postada: {nome_exibir} — {conteudo['titulo']}")
             else:
-                embed = build_embed_youtube_video(nome, conteudo, mention_video, avatar_url)
-                print(f"📹 Vídeo novo postado: {nome} — {conteudo['titulo']}")
+                # Vídeo normal — só posta se ID é novo
+                if videos_vistos.get(channel_id) == vid_id:
+                    continue
 
-            await canal.send(embed=embed)
+                if primeira_checagem:
+                    videos_vistos[channel_id] = vid_id
+                    salvar_json(VIDEOS_VISTOS_FILE, videos_vistos)
+                    continue
+
+                videos_vistos[channel_id] = vid_id
+                salvar_json(VIDEOS_VISTOS_FILE, videos_vistos)
+
+                if canal:
+                    mention_video = get_mention(guild, "youtube_video")
+                    avatar_url = membro.display_avatar.url if membro else None
+                    nome_exibir = membro.display_name if membro else nome
+                    embed = build_embed_youtube_video(nome_exibir, conteudo, mention_video, avatar_url)
+                    await canal.send(embed=embed)
+                    print(f"📹 Vídeo novo postado: {nome_exibir} — {conteudo['titulo']}")
 
     primeira_checagem = False
 
