@@ -151,17 +151,15 @@ def save_message_id(chave, message_id):
     """Salva ou atualiza um message_id na aba IDMensagens."""
     try:
         service = get_sheets_service(readonly=False)
-
-        # Lê as chaves existentes para ver se já existe
-        result = service.spreadsheets().values().get(
+        result  = service.spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID,
             range="IDMensagens!A2:A"
         ).execute()
-        rows  = result.get("values", [])
+        rows   = result.get("values", [])
         chaves = [r[0] for r in rows if r]
 
         if chave in chaves:
-            linha = chaves.index(chave) + 2  # +2 por causa do header
+            linha = chaves.index(chave) + 2
             service.spreadsheets().values().update(
                 spreadsheetId=SPREADSHEET_ID,
                 range=f"IDMensagens!B{linha}",
@@ -180,6 +178,52 @@ def save_message_id(chave, message_id):
         print(f"✅ message_id salvo na planilha: {chave} = {message_id}")
     except Exception as e:
         print(f"❌ Erro ao salvar IDMensagens: {e}")
+
+
+def get_estados_lives():
+    """Lê os estados das lives da aba IDMensagens. Retorna dict {chave: estado}"""
+    try:
+        service = get_sheets_service(readonly=True)
+        result  = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="IDMensagens!A2:B"
+        ).execute()
+        rows = result.get("values", [])
+        return {row[0]: row[1] for row in rows if len(row) >= 2}
+    except Exception as e:
+        print(f"❌ Erro ao ler estados de lives: {e}")
+        return {}
+
+
+def save_estado_live(chave, estado):
+    """Salva ou atualiza o estado de uma live na aba IDMensagens."""
+    try:
+        service = get_sheets_service(readonly=False)
+        result  = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="IDMensagens!A2:A"
+        ).execute()
+        rows   = result.get("values", [])
+        chaves = [r[0] for r in rows if r]
+
+        if chave in chaves:
+            linha = chaves.index(chave) + 2
+            service.spreadsheets().values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"IDMensagens!B{linha}",
+                valueInputOption="RAW",
+                body={"values": [[estado]]}
+            ).execute()
+        else:
+            service.spreadsheets().values().append(
+                spreadsheetId=SPREADSHEET_ID,
+                range="IDMensagens!A:B",
+                valueInputOption="RAW",
+                insertDataOption="INSERT_ROWS",
+                body={"values": [[chave, estado]]}
+            ).execute()
+    except Exception as e:
+        print(f"❌ Erro ao salvar estado de live: {e}")
 
 # ─────────────────────────────────────────
 #  RSS YOUTUBE
@@ -521,9 +565,10 @@ async def checar_twitch():
                 await membro.remove_roles(cargo_stream, reason="Twitch Live encerrada")
                 print(f"🟣 Cargo STREAMANDO AGORA removido (Twitch): {nome}")
 
-        # Registra estado
+        # Registra estado no Sheets
         lives_twitch_ativas[twitch_id] = "live" if esta_live else "offline"
         salvar_json("lives_twitch_ativas.json", lives_twitch_ativas)
+        save_estado_live(f"twitch_{twitch_id}", "live" if esta_live else "offline")
 
         # Posta embed só quando a live começa
         if esta_live and not estava_live and canal:
@@ -538,7 +583,11 @@ async def checar_twitch():
             print(f"🟣 Twitch Live postada: {nome_exibir} — {dados['titulo']}")
 
 
-
+# ─────────────────────────────────────────
+#  TASK: CHECAR VÍDEOS/LIVES YOUTUBE
+# ─────────────────────────────────────────
+LIVES_YT_ATIVAS_FILE = "lives_yt_ativas.json"
+lives_yt_ativas      = carregar_json(LIVES_YT_ATIVAS_FILE)
 
 @tasks.loop(minutes=5)
 async def checar_videos():
@@ -581,10 +630,11 @@ async def checar_videos():
                 elif not is_live and estava_em_live_yt:
                     await membro.remove_roles(cargo_stream, reason="YouTube Live encerrada")
 
-            # Registra estado da live
-            novo_estado = "live" if is_live else "video"
+            # Registra estado da live local e no Sheets
+            novo_estado = "live" if is_live else "offline"
             lives_yt_ativas[channel_id] = novo_estado
             salvar_json(LIVES_YT_ATIVAS_FILE, lives_yt_ativas)
+            save_estado_live(f"yt_{channel_id}", novo_estado)
 
             # ── Gerencia postagem ─────────────────────────────────────
             estava_em_live_yt = lives_yt_ativas.get(channel_id) == "live"
@@ -627,13 +677,31 @@ async def checar_videos():
 # ─────────────────────────────────────────
 @bot.event
 async def on_ready():
-    global reaction_roles_map
+    global reaction_roles_map, lives_yt_ativas, lives_twitch_ativas
     print(f"✅ Bot online como {bot.user} ({bot.user.id})")
     print(f"   Servidores: {[g.name for g in bot.guilds]}")
     reaction_roles_map = carregar_reaction_roles()
+
+    # Carrega estados das lives do Sheets para não perder entre reinicializações
+    estados = get_estados_lives()
+    for chave, estado in estados.items():
+        if chave.startswith("yt_"):
+            channel_id = chave[3:]
+            lives_yt_ativas[channel_id] = estado
+        elif chave.startswith("twitch_"):
+            twitch_id = chave[7:]
+            lives_twitch_ativas[twitch_id] = estado
+    print(f"📋 Estados de lives carregados do Sheets: {len(estados)} entradas")
+
+    # Carrega canais temporários do Sheets
+    calls_salvas = get_calls_temp()
+    canais_temporarios.update(calls_salvas)
+    print(f"📋 Calls temporárias carregadas do Sheets: {len(calls_salvas)} entradas")
+
     checar_videos.start()
     checar_twitch.start()
     limpar_cargos_presos.start()
+    limpar_calls_vazias.start()
 
 
 @tasks.loop(minutes=10)
@@ -742,6 +810,59 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
         salvar_json(LIVES_ATIVAS_FILE, lives_ativas)
 
 
+def get_calls_temp():
+    """Lê os canais temporários salvos na aba CallsTemp."""
+    try:
+        service = get_sheets_service(readonly=True)
+        result  = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="CallsTemp!A2:B"
+        ).execute()
+        rows = result.get("values", [])
+        return {int(row[0]): row[1] for row in rows if len(row) >= 2}
+    except Exception as e:
+        print(f"❌ Erro ao ler CallsTemp: {e}")
+        return {}
+
+
+def save_call_temp(canal_id, nome):
+    """Salva um canal temporário na aba CallsTemp."""
+    try:
+        service = get_sheets_service(readonly=False)
+        service.spreadsheets().values().append(
+            spreadsheetId=SPREADSHEET_ID,
+            range="CallsTemp!A:B",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": [[str(canal_id), nome]]}
+        ).execute()
+    except Exception as e:
+        print(f"❌ Erro ao salvar CallsTemp: {e}")
+
+
+def delete_call_temp(canal_id):
+    """Remove um canal temporário da aba CallsTemp."""
+    try:
+        service = get_sheets_service(readonly=False)
+        result  = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="CallsTemp!A2:A"
+        ).execute()
+        rows = result.get("values", [])
+        ids  = [r[0] for r in rows if r]
+
+        if str(canal_id) not in ids:
+            return
+
+        linha = ids.index(str(canal_id)) + 2
+        service.spreadsheets().values().clear(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"CallsTemp!A{linha}:B{linha}"
+        ).execute()
+    except Exception as e:
+        print(f"❌ Erro ao remover CallsTemp: {e}")
+
+
 @bot.event
 async def on_voice_state_update(member, before, after):
     guild = member.guild
@@ -755,17 +876,60 @@ async def on_voice_state_update(member, before, after):
             category=categoria,
             reason="Call temporária criada pelo bot"
         )
-        canais_temporarios[novo_canal.id] = True
+        canais_temporarios[novo_canal.id] = novo_canal.name
+        save_call_temp(novo_canal.id, novo_canal.name)
         await member.move_to(novo_canal)
         print(f"✅ Canal temporário criado: {nome_canal}")
 
-    # Usuário saiu de um canal temporário
-    if before.channel and before.channel.id in canais_temporarios:
-        if len(before.channel.members) == 0:
+    # Usuário saiu de um canal — checa se era temporário (pelo Sheets, dict ou nome)
+    if before.channel and before.channel.id != CANAL_CRIAR_CALL_ID:
+        canal_era_temp = (
+            before.channel.id in canais_temporarios or
+            before.channel.name.endswith("'s call")
+        )
+        if canal_era_temp and len(before.channel.members) == 0:
             try:
                 await before.channel.delete(reason="Call temporária vazia")
-                del canais_temporarios[before.channel.id]
+                canais_temporarios.pop(before.channel.id, None)
+                delete_call_temp(before.channel.id)
                 print(f"🗑️ Canal temporário deletado: {before.channel.name}")
+            except discord.NotFound:
+                pass
+
+
+@tasks.loop(minutes=5)
+async def limpar_calls_vazias():
+    """Varre Sheets + canais de voz e deleta calls temporárias vazias."""
+    await bot.wait_until_ready()
+    guild = bot.guilds[0] if bot.guilds else None
+    if not guild:
+        return
+
+    # IDs salvos no Sheets
+    calls_sheets = get_calls_temp()
+
+    for canal_id, nome in list(calls_sheets.items()):
+        canal = guild.get_channel(canal_id)
+        if canal is None or len(canal.members) == 0:
+            if canal:
+                try:
+                    await canal.delete(reason="Call temporária vazia — limpeza automática")
+                    print(f"🗑️ Call vazia deletada (Sheets): {nome}")
+                except discord.NotFound:
+                    pass
+            canais_temporarios.pop(canal_id, None)
+            delete_call_temp(canal_id)
+
+    # Fallback: varre todos os canais de voz pelo nome
+    for canal in guild.voice_channels:
+        if canal.id == CANAL_CRIAR_CALL_ID:
+            continue
+        if canal.name.endswith("'s call") and len(canal.members) == 0:
+            try:
+                await canal.delete(reason="Call temporária vazia — limpeza automática")
+                canais_temporarios.pop(canal.id, None)
+                delete_call_temp(canal.id)
+                print(f"🗑️ Call vazia deletada (fallback nome): {canal.name}")
             except discord.NotFound:
                 pass
 
