@@ -304,6 +304,23 @@ def detectar_plataforma(activity):
 # ─────────────────────────────────────────
 #  EMBEDS
 # ─────────────────────────────────────────
+def build_embed_twitch_api(nome, dados, mention, avatar_url=None):
+    embed = discord.Embed(color=0x9146FF, timestamp=datetime.utcnow())
+    embed.description = (
+        f"🟣 **TEM LIVE ACONTECENDO NA TWITCH:**\n\n"
+        f"**{nome}** está ao vivo na roxinha 🟪🟪🟪\n"
+        f"Bora lá assistir esse conteúdo, se inscrever e apoiar o pessoal da nossa comunidade. 💜💜💜💜💜\n\n"
+        f"**🎮 [{dados['titulo']}]({dados['url']})**\n"
+        f"📂 {dados['jogo']}\n\n"
+        f"{mention}"
+    )
+    if avatar_url:
+        embed.set_author(name=nome, icon_url=avatar_url)
+    else:
+        embed.set_author(name=nome)
+    return embed
+
+
 def build_embed_twitch(membro, dados, mention):
     embed = discord.Embed(color=0x9146FF, timestamp=datetime.utcnow())
     embed.description = (
@@ -382,10 +399,146 @@ def gerar_chave_live(membro_id, plataforma, dados):
     return f"{membro_id}:{plataforma}:{url}"
 
 # ─────────────────────────────────────────
-#  TASK: CHECAR VÍDEOS NOVOS (a cada 5 min)
+#  TWITCH API
 # ─────────────────────────────────────────
-LIVES_YT_ATIVAS_FILE = "lives_yt_ativas.json"
-lives_yt_ativas = carregar_json(LIVES_YT_ATIVAS_FILE)
+twitch_access_token  = None
+lives_twitch_ativas  = carregar_json("lives_twitch_ativas.json")
+
+def get_canais_twitch():
+    try:
+        service = get_sheets_service(readonly=True)
+        result  = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Twitch!A2:C"
+        ).execute()
+        rows   = result.get("values", [])
+        canais = []
+        for row in rows:
+            if len(row) >= 3:
+                canais.append({
+                    "nome":            row[0].strip(),
+                    "discord_user_id": row[1].strip(),
+                    "twitch_id":       row[2].strip(),
+                })
+        return canais
+    except Exception as e:
+        print(f"❌ Erro ao ler aba Twitch: {e}")
+        return []
+
+
+async def get_twitch_token(session):
+    global twitch_access_token
+    url  = "https://id.twitch.tv/oauth2/token"
+    data = {
+        "client_id":     TWITCH_CLIENT_ID,
+        "client_secret": TWITCH_CLIENT_SECRET,
+        "grant_type":    "client_credentials",
+    }
+    async with session.post(url, data=data) as resp:
+        result = await resp.json()
+        twitch_access_token = result.get("access_token")
+        print(f"✅ Twitch token obtido")
+
+
+async def checar_lives_twitch_api(session, twitch_ids):
+    """Checa quais canais estão ao vivo via Twitch API. Retorna dict {user_id: dados_live}"""
+    global twitch_access_token
+
+    if not twitch_access_token:
+        await get_twitch_token(session)
+
+    ids_query = "&".join(f"user_id={tid}" for tid in twitch_ids)
+    url     = f"https://api.twitch.tv/helix/streams?{ids_query}"
+    headers = {
+        "Client-ID":     TWITCH_CLIENT_ID,
+        "Authorization": f"Bearer {twitch_access_token}",
+    }
+
+    async with session.get(url, headers=headers) as resp:
+        # Token expirado — renova e tenta de novo
+        if resp.status == 401:
+            await get_twitch_token(session)
+            headers["Authorization"] = f"Bearer {twitch_access_token}"
+            async with session.get(url, headers=headers) as resp2:
+                data = await resp2.json()
+        else:
+            data = await resp.json()
+
+    lives = {}
+    for stream in data.get("data", []):
+        lives[stream["user_id"]] = {
+            "titulo": stream["title"] or "Live sem título",
+            "jogo":   stream["game_name"] or "Nenhuma categoria",
+            "url":    f"https://www.twitch.tv/{stream['user_login']}",
+            "user_login": stream["user_login"],
+        }
+    return lives
+
+
+# ─────────────────────────────────────────
+#  TASK: CHECAR LIVES TWITCH (a cada 5 min)
+# ─────────────────────────────────────────
+@tasks.loop(minutes=5)
+async def checar_twitch():
+    global lives_twitch_ativas
+    await bot.wait_until_ready()
+
+    guild = bot.guilds[0] if bot.guilds else None
+    if not guild:
+        return
+
+    canal        = guild.get_channel(CANAL_DIVULGACAO_ID)
+    cargo_stream = discord.utils.get(guild.roles, name=CARGO_STREAMANDO_NOME)
+    canais       = get_canais_twitch()
+
+    if not canais:
+        return
+
+    twitch_ids = [c["twitch_id"] for c in canais]
+
+    async with aiohttp.ClientSession() as session:
+        lives_agora = await checar_lives_twitch_api(session, twitch_ids)
+
+    for entrada in canais:
+        twitch_id   = entrada["twitch_id"]
+        nome        = entrada["nome"]
+        discord_uid = entrada["discord_user_id"]
+
+        esta_live       = twitch_id in lives_agora
+        estava_live     = lives_twitch_ativas.get(twitch_id) == "live"
+
+        try:
+            membro = guild.get_member(int(discord_uid))
+        except Exception:
+            membro = None
+
+        # Gerencia cargo
+        if cargo_stream and membro and not membro.bot:
+            if esta_live and not estava_live:
+                await membro.add_roles(cargo_stream, reason="Twitch Live iniciada")
+                print(f"🟣 Cargo STREAMANDO AGORA adicionado (Twitch): {nome}")
+            elif not esta_live and estava_live:
+                await membro.remove_roles(cargo_stream, reason="Twitch Live encerrada")
+                print(f"🟣 Cargo STREAMANDO AGORA removido (Twitch): {nome}")
+
+        # Registra estado
+        lives_twitch_ativas[twitch_id] = "live" if esta_live else "offline"
+        salvar_json("lives_twitch_ativas.json", lives_twitch_ativas)
+
+        # Posta embed só quando a live começa
+        if esta_live and not estava_live and canal:
+            dados   = lives_agora[twitch_id]
+            mention = get_mention(guild, "twitch")
+
+            nome_exibir = membro.display_name if membro else nome
+            avatar_url  = membro.display_avatar.url if membro else None
+
+            embed = build_embed_twitch_api(nome_exibir, dados, mention, avatar_url)
+            await canal.send(embed=embed)
+            print(f"🟣 Twitch Live postada: {nome_exibir} — {dados['titulo']}")
+
+
+
 
 @tasks.loop(minutes=5)
 async def checar_videos():
@@ -479,6 +632,7 @@ async def on_ready():
     print(f"   Servidores: {[g.name for g in bot.guilds]}")
     reaction_roles_map = carregar_reaction_roles()
     checar_videos.start()
+    checar_twitch.start()
     limpar_cargos_presos.start()
 
 
@@ -557,6 +711,10 @@ async def on_presence_update(before: discord.Member, after: discord.Member):
     for atividade in atividades_novas:
         plataforma, dados = detectar_plataforma(atividade)
         if not plataforma or not dados:
+            continue
+
+        # Twitch agora é gerenciada via API — ignora presença para evitar duplicatas
+        if plataforma == "twitch":
             continue
 
         chave = gerar_chave_live(after.id, plataforma, dados)
