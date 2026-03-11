@@ -14,7 +14,10 @@ from googleapiclient.discovery import build
 TOKEN             = os.environ.get("TOKEN")
 GOOGLE_CREDS_JSON = os.environ.get("GOOGLE_CREDS_JSON")
 SPREADSHEET_ID    = os.environ.get("SPREADSHEET_ID")
-SHEET_RANGE       = "YouTube!A2:C"  # Alias | ID no Discord | ID do Canal
+SHEET_RANGE       = "YouTube!A2:C"
+TWITCH_CLIENT_ID     = os.environ.get("TWITCH_CLIENT_ID")
+TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET")
+twitch_access_token  = None  # será obtido automaticamente
 
 CANAL_DIVULGACAO_ID   = 1468613615987851275
 CANAL_CONFIG_ROLES_ID = 1479645122428932198
@@ -103,7 +106,29 @@ def get_canais_youtube():
                 })
         return canais
     except Exception as e:
-        print(f"❌ Erro ao ler planilha: {e}")
+        print(f"❌ Erro ao ler planilha YouTube: {e}")
+        return []
+
+
+def get_canais_twitch():
+    try:
+        service = get_sheets_service(readonly=True)
+        result  = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Twitch!A2:C"
+        ).execute()
+        rows   = result.get("values", [])
+        canais = []
+        for row in rows:
+            if len(row) >= 3:
+                canais.append({
+                    "nome":            row[0].strip(),
+                    "discord_user_id": row[1].strip(),
+                    "twitch_id":       row[2].strip(),
+                })
+        return canais
+    except Exception as e:
+        print(f"❌ Erro ao ler planilha Twitch: {e}")
         return []
 
 
@@ -161,7 +186,7 @@ def save_message_id(chave, message_id):
 # ─────────────────────────────────────────
 async def buscar_ultimo_conteudo(session, channel_id):
     """Retorna o conteúdo mais recente do canal via RSS.
-    Detecta se é live ativa, live encerrada ou vídeo normal."""
+    Varre os primeiros 5 itens para detectar live ativa ou vídeo novo."""
     url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
@@ -174,10 +199,35 @@ async def buscar_ultimo_conteudo(session, channel_id):
                 "media": "http://search.yahoo.com/mrss/",
                 "yt":    "http://www.youtube.com/xml/schemas/2015",
             }
-            entry = root.find("atom:entry", ns)
-            if entry is None:
+            entries = root.findall("atom:entry", ns)[:5]
+            if not entries:
                 return None
 
+            # Primeiro tenta achar uma live ativa entre os 5 primeiros
+            for entry in entries:
+                video_id = entry.find("yt:videoId", ns)
+                titulo   = entry.find("atom:title", ns)
+                link     = entry.find("atom:link", ns)
+
+                if video_id is None:
+                    continue
+
+                vid_id    = video_id.text
+                thumb_url = f"https://img.youtube.com/vi/{vid_id}/maxresdefault.jpg"
+                vid_url   = link.attrib.get("href", "") if link is not None else f"https://www.youtube.com/watch?v={vid_id}"
+
+                is_live = await checar_se_live(session, vid_id)
+                if is_live:
+                    return {
+                        "id":      vid_id,
+                        "titulo":  titulo.text if titulo is not None else "Live sem título",
+                        "url":     vid_url,
+                        "thumb":   thumb_url,
+                        "is_live": True,
+                    }
+
+            # Nenhuma live ativa — retorna o vídeo mais recente (primeiro item)
+            entry    = entries[0]
             video_id = entry.find("yt:videoId", ns)
             titulo   = entry.find("atom:title", ns)
             link     = entry.find("atom:link", ns)
@@ -189,17 +239,12 @@ async def buscar_ultimo_conteudo(session, channel_id):
             thumb_url = f"https://img.youtube.com/vi/{vid_id}/maxresdefault.jpg"
             vid_url   = link.attrib.get("href", "") if link is not None else f"https://www.youtube.com/watch?v={vid_id}"
 
-            # Verifica se é live ativa consultando a thumbnail especial
-            # YouTube usa /vi/{id}/maxresdefault.jpg para lives também,
-            # mas podemos checar via oEmbed se é live
-            is_live = await checar_se_live(session, vid_id)
-
             return {
-                "id":     vid_id,
-                "titulo": titulo.text if titulo is not None else "Sem título",
-                "url":    vid_url,
-                "thumb":  thumb_url,
-                "is_live": is_live,
+                "id":      vid_id,
+                "titulo":  titulo.text if titulo is not None else "Vídeo sem título",
+                "url":     vid_url,
+                "thumb":   thumb_url,
+                "is_live": False,
             }
     except Exception as e:
         print(f"❌ Erro RSS canal {channel_id}: {e}")
