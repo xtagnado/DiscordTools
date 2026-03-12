@@ -374,6 +374,52 @@ async def on_ready():
     checar_youtube.start()
     checar_twitch.start()
     limpar_cargos_presos.start()
+    limpar_calls_vazias.start()
+
+# ═══════════════════════════════════════════════════════════════
+#  CALLS TEMPORÁRIAS — PLANILHA
+# ═══════════════════════════════════════════════════════════════
+def get_calls_salvas():
+    """Retorna {canal_id: nome} das calls salvas na planilha."""
+    try:
+        service = get_sheets_service()
+        result  = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID, range="CallsTemp!A2:B"
+        ).execute()
+        return {int(r[0]): r[1] for r in result.get("values", []) if len(r) >= 2}
+    except Exception as e:
+        print(f"❌ Erro ao ler CallsTemp: {e}")
+        return {}
+
+def salvar_call(canal_id, nome):
+    try:
+        service = get_sheets_service(readonly=False)
+        service.spreadsheets().values().append(
+            spreadsheetId=SPREADSHEET_ID,
+            range="CallsTemp!A:B",
+            valueInputOption="RAW",
+            insertDataOption="INSERT_ROWS",
+            body={"values": [[str(canal_id), nome]]}
+        ).execute()
+    except Exception as e:
+        print(f"❌ Erro ao salvar call: {e}")
+
+def remover_call(canal_id):
+    try:
+        service = get_sheets_service(readonly=False)
+        result  = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID, range="CallsTemp!A2:A"
+        ).execute()
+        ids = [r[0] for r in result.get("values", []) if r]
+        if str(canal_id) not in ids:
+            return
+        linha = ids.index(str(canal_id)) + 2
+        service.spreadsheets().values().clear(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"CallsTemp!A{linha}:B{linha}"
+        ).execute()
+    except Exception as e:
+        print(f"❌ Erro ao remover call: {e}")
 
 # ═══════════════════════════════════════════════════════════════
 #  CRIAR CALL — completamente isolado
@@ -390,8 +436,9 @@ async def on_voice_state_update(member, before, after):
                 reason="Call temporária"
             )
             canais_temporarios[novo_canal.id] = True
+            salvar_call(novo_canal.id, nome_canal)
             await member.move_to(novo_canal)
-            print(f"✅ Call criada: {nome_canal}")
+            print(f"✅ Call criada: {nome_canal} ({novo_canal.id})")
         except Exception as e:
             print(f"❌ Erro ao criar call: {e}")
         return
@@ -401,12 +448,42 @@ async def on_voice_state_update(member, before, after):
         if len(before.channel.members) == 0:
             try:
                 await before.channel.delete(reason="Call temporária vazia")
-                del canais_temporarios[before.channel.id]
+                canais_temporarios.pop(before.channel.id, None)
+                remover_call(before.channel.id)
                 print(f"🗑️ Call deletada: {before.channel.name}")
             except discord.NotFound:
                 canais_temporarios.pop(before.channel.id, None)
+                remover_call(before.channel.id)
             except Exception as e:
                 print(f"❌ Erro ao deletar call: {e}")
+
+
+@tasks.loop(minutes=5)
+async def limpar_calls_vazias():
+    """A cada 5 min: verifica planilha + canais de voz e deleta calls vazias."""
+    await bot.wait_until_ready()
+    guild = bot.guilds[0] if bot.guilds else None
+    if not guild:
+        return
+    try:
+        calls = get_calls_salvas()
+        for canal_id, nome in list(calls.items()):
+            canal = guild.get_channel(canal_id)
+            if canal is None:
+                # Canal já não existe — limpa da planilha
+                canais_temporarios.pop(canal_id, None)
+                remover_call(canal_id)
+                print(f"🧹 Call removida da planilha (não existe mais): {nome}")
+            elif len(canal.members) == 0:
+                try:
+                    await canal.delete(reason="Call vazia — limpeza automática")
+                    print(f"🗑️ Call vazia deletada (limpeza): {nome}")
+                except discord.NotFound:
+                    pass
+                canais_temporarios.pop(canal_id, None)
+                remover_call(canal_id)
+    except Exception as e:
+        print(f"❌ Erro em limpar_calls_vazias: {e}")
 
 # ═══════════════════════════════════════════════════════════════
 #  REACTION ROLES — completamente isolado
