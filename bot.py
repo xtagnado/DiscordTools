@@ -373,7 +373,7 @@ async def on_ready():
 @bot.event
 async def on_voice_state_update(member, before, after):
     guild = member.guild
-    print(f"🎤 Voice update: {member.display_name} | antes: {before.channel} | depois: {after.channel} | CANAL_CRIAR_CALL_ID: {CANAL_CRIAR_CALL_ID}")
+    print(f"🎤 Voice update: {member.display_name} | antes: {before.channel} | depois: {after.channel} | after.channel.id: {after.channel.id if after.channel else None} | CANAL_CRIAR_CALL_ID: {CANAL_CRIAR_CALL_ID} | match: {after.channel and after.channel.id == CANAL_CRIAR_CALL_ID}")
 
     # Usuário entrou no canal "➕ Criar Call"
     if after.channel and after.channel.id == CANAL_CRIAR_CALL_ID:
