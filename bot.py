@@ -90,7 +90,7 @@ def get_canais_twitch():
         ).execute()
         return [
             {"nome": r[0].strip(), "discord_user_id": r[1].strip(), "twitch_id": r[2].strip()}
-            for r in result.get("values", []) if len(r) >= 3
+            for r in result.get("values", []) if len(r) >= 3 and r[2].strip()
         ]
     except Exception as e:
         print(f"❌ Erro ao ler planilha Twitch: {e}")
@@ -286,6 +286,7 @@ intents = discord.Intents.default()
 intents.members         = True
 intents.presences       = True
 intents.message_content = True
+intents.voice_states    = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
