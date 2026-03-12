@@ -530,51 +530,60 @@ async def checar_twitch():
     if not guild:
         return
 
-    canal        = guild.get_channel(CANAL_DIVULGACAO_ID)
-    cargo_stream = discord.utils.get(guild.roles, name=CARGO_STREAMANDO_NOME)
-    canais       = get_canais_twitch()
+    try:
+        canal        = guild.get_channel(CANAL_DIVULGACAO_ID)
+        cargo_stream = discord.utils.get(guild.roles, name=CARGO_STREAMANDO_NOME)
+        canais       = get_canais_twitch()
 
-    if not canais:
-        return
+        if not canais:
+            return
 
-    async with aiohttp.ClientSession() as session:
-        lives_agora = await checar_lives_twitch_api(session, [c["twitch_id"] for c in canais])
+        async with aiohttp.ClientSession() as session:
+            twitch_ids = [c["twitch_id"] for c in canais if c["twitch_id"]]
+            if not twitch_ids:
+                return
+            lives_agora = await checar_lives_twitch_api(session, twitch_ids)
 
-    for entrada in canais:
-        twitch_id   = entrada["twitch_id"]
-        nome        = entrada["nome"]
-        discord_uid = entrada["discord_user_id"]
+        for entrada in canais:
+            if not entrada["twitch_id"]:
+                continue
+            twitch_id   = entrada["twitch_id"]
+            nome        = entrada["nome"]
+            discord_uid = entrada["discord_user_id"]
 
-        esta_live   = twitch_id in lives_agora
-        estava_live = lives_twitch_ativas.get(twitch_id) == "live"
+            esta_live   = twitch_id in lives_agora
+            estava_live = lives_twitch_ativas.get(twitch_id) == "live"
 
-        try:
-            membro = guild.get_member(int(discord_uid))
-        except Exception:
-            membro = None
+            try:
+                membro = guild.get_member(int(discord_uid))
+            except Exception:
+                membro = None
 
-        # Gerencia cargo
-        if cargo_stream and membro and not membro.bot:
-            if esta_live and not estava_live:
-                await membro.add_roles(cargo_stream, reason="Twitch Live iniciada")
-                print(f"🟣 Cargo adicionado (Twitch): {nome}")
-            elif not esta_live and estava_live:
-                await membro.remove_roles(cargo_stream, reason="Twitch Live encerrada")
-                print(f"🟣 Cargo removido (Twitch encerrada): {nome}")
+            # Gerencia cargo
+            if cargo_stream and membro and not membro.bot:
+                if esta_live and not estava_live:
+                    await membro.add_roles(cargo_stream, reason="Twitch Live iniciada")
+                    print(f"🟣 Cargo adicionado (Twitch): {nome}")
+                elif not esta_live and estava_live:
+                    await membro.remove_roles(cargo_stream, reason="Twitch Live encerrada")
+                    print(f"🟣 Cargo removido (Twitch encerrada): {nome}")
 
-        # Atualiza estado
-        lives_twitch_ativas[twitch_id] = "live" if esta_live else "offline"
-        salvar_json("lives_twitch_ativas.json", lives_twitch_ativas)
+            # Atualiza estado
+            lives_twitch_ativas[twitch_id] = "live" if esta_live else "offline"
+            salvar_json("lives_twitch_ativas.json", lives_twitch_ativas)
 
-        # Posta embed quando live começa
-        if esta_live and not estava_live and canal:
-            dados       = lives_agora[twitch_id]
-            mention     = get_mention(guild, "twitch")
-            nome_exibir = membro.display_name if membro else nome
-            avatar_url  = membro.display_avatar.url if membro else None
-            embed       = build_embed_twitch(nome_exibir, dados, mention, avatar_url)
-            await canal.send(embed=embed)
-            print(f"🟣 Twitch Live postada: {nome_exibir} — {dados['titulo']}")
+            # Posta embed quando live começa
+            if esta_live and not estava_live and canal:
+                dados       = lives_agora[twitch_id]
+                mention     = get_mention(guild, "twitch")
+                nome_exibir = membro.display_name if membro else nome
+                avatar_url  = membro.display_avatar.url if membro else None
+                embed       = build_embed_twitch(nome_exibir, dados, mention, avatar_url)
+                await canal.send(embed=embed)
+                print(f"🟣 Twitch Live postada: {nome_exibir} — {dados['titulo']}")
+
+    except Exception as e:
+        print(f"❌ Erro em checar_twitch: {e}")
 
 # ─────────────────────────────────────────
 #  TASK: LIMPAR CARGOS PRESOS (a cada 10 min)
