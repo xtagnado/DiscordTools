@@ -481,6 +481,15 @@ async def checar_youtube():
                     await membro.remove_roles(cargo_stream, reason="YouTube Live encerrada")
                     print(f"🔴 Cargo removido (YT Live encerrada): {membro.display_name}")
 
+            # Na primeira checagem: registra estado mas não posta
+            if primeira_checagem:
+                lives_yt_ativas[channel_id] = "live" if is_live else "video"
+                salvar_json("lives_yt_ativas.json", lives_yt_ativas)
+                if not is_live:
+                    videos_vistos[channel_id] = vid_id
+                    salvar_json("videos_vistos.json", videos_vistos)
+                continue
+
             # Atualiza estado
             lives_yt_ativas[channel_id] = "live" if is_live else "video"
             salvar_json("lives_yt_ativas.json", lives_yt_ativas)
@@ -498,10 +507,6 @@ async def checar_youtube():
             else:
                 # Vídeo novo
                 if videos_vistos.get(channel_id) == vid_id:
-                    continue
-                if primeira_checagem:
-                    videos_vistos[channel_id] = vid_id
-                    salvar_json("videos_vistos.json", videos_vistos)
                     continue
                 videos_vistos[channel_id] = vid_id
                 salvar_json("videos_vistos.json", videos_vistos)
