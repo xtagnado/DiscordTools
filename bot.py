@@ -182,7 +182,11 @@ async def checar_lives_twitch_api(session, twitch_ids):
     if not twitch_access_token:
         await get_twitch_token(session)
 
-    ids_query = "&".join(f"user_id={tid}" for tid in twitch_ids)
+    ids_validos = [str(tid).strip() for tid in twitch_ids if tid and str(tid).strip()]
+    if not ids_validos:
+        return {}
+
+    ids_query = "&".join(f"user_id={tid}" for tid in ids_validos)
     headers   = {
         "Client-ID":     TWITCH_CLIENT_ID,
         "Authorization": f"Bearer {twitch_access_token}",
@@ -202,9 +206,9 @@ async def checar_lives_twitch_api(session, twitch_ids):
 
     return {
         stream["user_id"]: {
-            "titulo":     stream["title"] or "Live sem título",
-            "jogo":       stream["game_name"] or "Nenhuma categoria",
-            "url":        f"https://www.twitch.tv/{stream['user_login']}",
+            "titulo": stream["title"] or "Live sem título",
+            "jogo":   stream["game_name"] or "Nenhuma categoria",
+            "url":    f"https://www.twitch.tv/{stream['user_login']}",
         }
         for stream in data.get("data", [])
     }
@@ -374,13 +378,16 @@ async def on_voice_state_update(member, before, after):
     # Usuário entrou no canal "➕ Criar Call"
     if after.channel and after.channel.id == CANAL_CRIAR_CALL_ID:
         try:
+            print(f"🔧 Criando call para {member.display_name}...")
             categoria  = after.channel.category
             nome_canal = f"{member.display_name}'s call"
+            print(f"🔧 Categoria: {categoria} | Nome: {nome_canal}")
             novo_canal = await guild.create_voice_channel(
                 name=nome_canal,
                 category=categoria,
                 reason="Call temporária criada pelo bot"
             )
+            print(f"🔧 Canal criado: {novo_canal.id}")
             canais_temporarios[novo_canal.id] = True
             await member.move_to(novo_canal)
             print(f"✅ Canal temporário criado: {nome_canal}")
