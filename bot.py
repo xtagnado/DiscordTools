@@ -8,9 +8,9 @@ from datetime import datetime
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
-# ─────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
 #  CONFIGURAÇÕES
-# ─────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
 TOKEN                = os.environ.get("TOKEN")
 GOOGLE_CREDS_JSON    = os.environ.get("GOOGLE_CREDS_JSON")
 SPREADSHEET_ID       = os.environ.get("SPREADSHEET_ID")
@@ -33,29 +33,35 @@ TITULOS_BLOCOS = {
     1: "## Criadores de conteúdo ##\n### Para ver os canais de comunicação específicos desses canais ###",
 }
 
-# ─────────────────────────────────────────
-#  PERSISTÊNCIA LOCAL
-# ─────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+#  PERSISTÊNCIA LOCAL (JSON)
+# ═══════════════════════════════════════════════════════════════
 def carregar_json(path):
-    if os.path.exists(path):
-        with open(path, "r") as f:
-            return json.load(f)
+    try:
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"❌ Erro ao carregar {path}: {e}")
     return {}
 
 def salvar_json(path, data):
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"❌ Erro ao salvar {path}: {e}")
 
-videos_vistos      = carregar_json("videos_vistos.json")
-lives_yt_ativas    = carregar_json("lives_yt_ativas.json")
+videos_vistos       = carregar_json("videos_vistos.json")
+lives_yt_ativas     = carregar_json("lives_yt_ativas.json")
 lives_twitch_ativas = carregar_json("lives_twitch_ativas.json")
-canais_temporarios  = {}  # {canal_id: True} — resetado a cada reinício (ok, é RAM)
+canais_temporarios  = {}
 primeira_checagem   = True
 twitch_access_token = None
 
-# ─────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
 #  GOOGLE SHEETS
-# ─────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
 def get_sheets_service(readonly=True):
     creds_info = json.loads(GOOGLE_CREDS_JSON)
     scope = (
@@ -69,64 +75,66 @@ def get_sheets_service(readonly=True):
 
 def get_canais_youtube():
     try:
-        service = get_sheets_service()
-        result  = service.spreadsheets().values().get(
+        svc    = get_sheets_service()
+        result = svc.spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID, range="YouTube!A2:C"
         ).execute()
         return [
             {"nome": r[0].strip(), "discord_user_id": r[1].strip(), "channel_id": r[2].strip()}
-            for r in result.get("values", []) if len(r) >= 3
+            for r in result.get("values", [])
+            if len(r) >= 3 and r[0].strip() and r[1].strip() and r[2].strip()
         ]
     except Exception as e:
-        print(f"❌ Erro ao ler planilha YouTube: {e}")
+        print(f"❌ Sheets YouTube: {e}")
         return []
 
 
 def get_canais_twitch():
     try:
-        service = get_sheets_service()
-        result  = service.spreadsheets().values().get(
+        svc    = get_sheets_service()
+        result = svc.spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID, range="Twitch!A2:C"
         ).execute()
         return [
             {"nome": r[0].strip(), "discord_user_id": r[1].strip(), "twitch_id": r[2].strip()}
-            for r in result.get("values", []) if len(r) >= 3 and r[2].strip()
+            for r in result.get("values", [])
+            if len(r) >= 3 and r[0].strip() and r[1].strip() and r[2].strip()
         ]
     except Exception as e:
-        print(f"❌ Erro ao ler planilha Twitch: {e}")
+        print(f"❌ Sheets Twitch: {e}")
         return []
 
 
 def get_message_ids():
     try:
-        service = get_sheets_service()
-        result  = service.spreadsheets().values().get(
+        svc    = get_sheets_service()
+        result = svc.spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID, range="IDMensagens!A2:B"
         ).execute()
         return {r[0]: r[1] for r in result.get("values", []) if len(r) >= 2}
     except Exception as e:
-        print(f"❌ Erro ao ler IDMensagens: {e}")
+        print(f"❌ Sheets IDMensagens (leitura): {e}")
         return {}
 
 
 def save_message_id(chave, message_id):
     try:
-        service = get_sheets_service(readonly=False)
-        result  = service.spreadsheets().values().get(
+        svc    = get_sheets_service(readonly=False)
+        result = svc.spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID, range="IDMensagens!A2:A"
         ).execute()
         chaves = [r[0] for r in result.get("values", []) if r]
 
         if chave in chaves:
             linha = chaves.index(chave) + 2
-            service.spreadsheets().values().update(
+            svc.spreadsheets().values().update(
                 spreadsheetId=SPREADSHEET_ID,
                 range=f"IDMensagens!B{linha}",
                 valueInputOption="RAW",
                 body={"values": [[str(message_id)]]}
             ).execute()
         else:
-            service.spreadsheets().values().append(
+            svc.spreadsheets().values().append(
                 spreadsheetId=SPREADSHEET_ID,
                 range="IDMensagens!A:B",
                 valueInputOption="RAW",
@@ -135,141 +143,99 @@ def save_message_id(chave, message_id):
             ).execute()
         print(f"✅ message_id salvo: {chave} = {message_id}")
     except Exception as e:
-        print(f"❌ Erro ao salvar IDMensagens: {e}")
+        print(f"❌ Sheets IDMensagens (escrita): {e}")
 
-# ─────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
 #  REACTION ROLES
-# ─────────────────────────────────────────
-def carregar_reaction_roles():
-    if not os.path.exists("reaction_roles.json"):
-        return {}
-    with open("reaction_roles.json", "r") as f:
-        data = json.load(f)
-    ids_planilha = get_message_ids()
-    mapping = {}
-    for i, msg in enumerate(data.get("mensagens", [])):
-        chave  = f"message_id_{i}"
-        msg_id = ids_planilha.get(chave) or msg.get("message_id")
-        if not msg_id:
-            continue
-        mapping[int(msg_id)] = {
-            r["emoji_id"]: r["role_id"] for r in msg.get("reactions", [])
-        }
-    return mapping
-
+# ═══════════════════════════════════════════════════════════════
 reaction_roles_map = {}
 
-# ─────────────────────────────────────────
+def carregar_reaction_roles():
+    try:
+        if not os.path.exists("reaction_roles.json"):
+            return {}
+        with open("reaction_roles.json", "r") as f:
+            data = json.load(f)
+        ids_planilha = get_message_ids()
+        mapping = {}
+        for i, msg in enumerate(data.get("mensagens", [])):
+            chave  = f"message_id_{i}"
+            msg_id = ids_planilha.get(chave) or msg.get("message_id")
+            if not msg_id:
+                continue
+            mapping[int(msg_id)] = {
+                r["emoji_id"]: r["role_id"] for r in msg.get("reactions", [])
+            }
+        return mapping
+    except Exception as e:
+        print(f"❌ Erro ao carregar reaction roles: {e}")
+        return {}
+
+# ═══════════════════════════════════════════════════════════════
 #  TWITCH API
-# ─────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
 async def get_twitch_token(session):
     global twitch_access_token
-    async with session.post(
-        "https://id.twitch.tv/oauth2/token",
-        data={
-            "client_id":     TWITCH_CLIENT_ID,
-            "client_secret": TWITCH_CLIENT_SECRET,
-            "grant_type":    "client_credentials",
-        }
-    ) as resp:
-        result = await resp.json()
-        twitch_access_token = result.get("access_token")
-        print("✅ Twitch token obtido")
+    try:
+        async with session.post(
+            "https://id.twitch.tv/oauth2/token",
+            data={
+                "client_id":     TWITCH_CLIENT_ID,
+                "client_secret": TWITCH_CLIENT_SECRET,
+                "grant_type":    "client_credentials",
+            }
+        ) as resp:
+            result = await resp.json()
+            twitch_access_token = result.get("access_token")
+            print("✅ Twitch token obtido")
+    except Exception as e:
+        print(f"❌ Erro ao obter token Twitch: {e}")
 
 
 async def checar_lives_twitch_api(session, twitch_ids):
     global twitch_access_token
-    if not twitch_access_token:
-        await get_twitch_token(session)
+    try:
+        ids_validos = [str(tid).strip() for tid in twitch_ids if tid and str(tid).strip()]
+        if not ids_validos:
+            return {}
+        if not twitch_access_token:
+            await get_twitch_token(session)
+        if not twitch_access_token:
+            return {}
 
-    ids_validos = [str(tid).strip() for tid in twitch_ids if tid and str(tid).strip()]
-    if not ids_validos:
+        ids_query = "&".join(f"user_id={tid}" for tid in ids_validos)
+        headers   = {
+            "Client-ID":     TWITCH_CLIENT_ID,
+            "Authorization": f"Bearer {twitch_access_token}",
+        }
+        async with session.get(
+            f"https://api.twitch.tv/helix/streams?{ids_query}", headers=headers
+        ) as resp:
+            if resp.status == 401:
+                await get_twitch_token(session)
+                headers["Authorization"] = f"Bearer {twitch_access_token}"
+                async with session.get(
+                    f"https://api.twitch.tv/helix/streams?{ids_query}", headers=headers
+                ) as resp2:
+                    data = await resp2.json()
+            else:
+                data = await resp.json()
+
+        return {
+            stream["user_id"]: {
+                "titulo": stream["title"] or "Live sem título",
+                "jogo":   stream["game_name"] or "Nenhuma categoria",
+                "url":    f"https://www.twitch.tv/{stream['user_login']}",
+            }
+            for stream in data.get("data", [])
+        }
+    except Exception as e:
+        print(f"❌ Erro Twitch API: {e}")
         return {}
 
-    ids_query = "&".join(f"user_id={tid}" for tid in ids_validos)
-    headers   = {
-        "Client-ID":     TWITCH_CLIENT_ID,
-        "Authorization": f"Bearer {twitch_access_token}",
-    }
-    async with session.get(
-        f"https://api.twitch.tv/helix/streams?{ids_query}", headers=headers
-    ) as resp:
-        if resp.status == 401:
-            await get_twitch_token(session)
-            headers["Authorization"] = f"Bearer {twitch_access_token}"
-            async with session.get(
-                f"https://api.twitch.tv/helix/streams?{ids_query}", headers=headers
-            ) as resp2:
-                data = await resp2.json()
-        else:
-            data = await resp.json()
-
-    return {
-        stream["user_id"]: {
-            "titulo": stream["title"] or "Live sem título",
-            "jogo":   stream["game_name"] or "Nenhuma categoria",
-            "url":    f"https://www.twitch.tv/{stream['user_login']}",
-        }
-        for stream in data.get("data", [])
-    }
-
-# ─────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
 #  RSS YOUTUBE
-# ─────────────────────────────────────────
-async def buscar_ultimo_conteudo(session, channel_id):
-    url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
-    try:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-            if resp.status != 200:
-                return None
-            root = ET.fromstring(await resp.text())
-            ns   = {
-                "atom":  "http://www.w3.org/2005/Atom",
-                "media": "http://search.yahoo.com/mrss/",
-                "yt":    "http://www.youtube.com/xml/schemas/2015",
-            }
-            entries = root.findall("atom:entry", ns)[:5]
-            if not entries:
-                return None
-
-            # Procura live ativa nos 5 primeiros itens
-            for entry in entries:
-                video_id = entry.find("yt:videoId", ns)
-                if video_id is None:
-                    continue
-                vid_id  = video_id.text
-                is_live = await checar_se_live(session, vid_id)
-                if is_live:
-                    titulo = entry.find("atom:title", ns)
-                    link   = entry.find("atom:link", ns)
-                    return {
-                        "id":      vid_id,
-                        "titulo":  titulo.text if titulo is not None else "Live sem título",
-                        "url":     link.attrib.get("href", f"https://www.youtube.com/watch?v={vid_id}") if link is not None else "",
-                        "thumb":   f"https://img.youtube.com/vi/{vid_id}/maxresdefault.jpg",
-                        "is_live": True,
-                    }
-
-            # Nenhuma live — retorna o vídeo mais recente
-            entry    = entries[0]
-            video_id = entry.find("yt:videoId", ns)
-            if video_id is None:
-                return None
-            vid_id = video_id.text
-            titulo = entry.find("atom:title", ns)
-            link   = entry.find("atom:link", ns)
-            return {
-                "id":      vid_id,
-                "titulo":  titulo.text if titulo is not None else "Vídeo sem título",
-                "url":     link.attrib.get("href", f"https://www.youtube.com/watch?v={vid_id}") if link is not None else "",
-                "thumb":   f"https://img.youtube.com/vi/{vid_id}/maxresdefault.jpg",
-                "is_live": False,
-            }
-    except Exception as e:
-        print(f"❌ Erro RSS canal {channel_id}: {e}")
-        return None
-
-
+# ═══════════════════════════════════════════════════════════════
 async def checar_se_live(session, video_id):
     try:
         async with session.get(
@@ -283,27 +249,60 @@ async def checar_se_live(session, video_id):
     except Exception:
         return False
 
-# ─────────────────────────────────────────
-#  SETUP DO BOT
-# ─────────────────────────────────────────
-intents = discord.Intents.default()
-intents.members         = True
-intents.presences       = True
-intents.message_content = True
-intents.voice_states    = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+async def buscar_ultimo_conteudo(session, channel_id):
+    try:
+        url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            if resp.status != 200:
+                return None
+            root = ET.fromstring(await resp.text())
+            ns   = {
+                "atom": "http://www.w3.org/2005/Atom",
+                "yt":   "http://www.youtube.com/xml/schemas/2015",
+            }
+            entries = root.findall("atom:entry", ns)[:5]
+            if not entries:
+                return None
 
-# ─────────────────────────────────────────
-#  HELPERS
-# ─────────────────────────────────────────
-def get_mention(guild, plataforma):
-    role = guild.get_role(MENTION_ROLES.get(plataforma, 0))
-    return role.mention if role else ""
+            for entry in entries:
+                vid_el = entry.find("yt:videoId", ns)
+                if vid_el is None:
+                    continue
+                vid_id  = vid_el.text
+                is_live = await checar_se_live(session, vid_id)
+                if is_live:
+                    titulo = entry.find("atom:title", ns)
+                    link   = entry.find("atom:link", ns)
+                    return {
+                        "id":      vid_id,
+                        "titulo":  titulo.text if titulo is not None else "Live sem título",
+                        "url":     link.attrib.get("href", f"https://www.youtube.com/watch?v={vid_id}") if link is not None else "",
+                        "thumb":   f"https://img.youtube.com/vi/{vid_id}/maxresdefault.jpg",
+                        "is_live": True,
+                    }
 
-# ─────────────────────────────────────────
+            entry  = entries[0]
+            vid_el = entry.find("yt:videoId", ns)
+            if vid_el is None:
+                return None
+            vid_id = vid_el.text
+            titulo = entry.find("atom:title", ns)
+            link   = entry.find("atom:link", ns)
+            return {
+                "id":      vid_id,
+                "titulo":  titulo.text if titulo is not None else "Vídeo sem título",
+                "url":     link.attrib.get("href", f"https://www.youtube.com/watch?v={vid_id}") if link is not None else "",
+                "thumb":   f"https://img.youtube.com/vi/{vid_id}/maxresdefault.jpg",
+                "is_live": False,
+            }
+    except Exception as e:
+        print(f"❌ Erro RSS {channel_id}: {e}")
+        return None
+
+# ═══════════════════════════════════════════════════════════════
 #  EMBEDS
-# ─────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
 def build_embed_twitch(nome, dados, mention, avatar_url=None):
     embed = discord.Embed(color=0x9146FF, timestamp=datetime.utcnow())
     embed.description = (
@@ -314,10 +313,7 @@ def build_embed_twitch(nome, dados, mention, avatar_url=None):
         f"📂 {dados['jogo']}\n\n"
         f"{mention}"
     )
-    if avatar_url:
-        embed.set_author(name=nome, icon_url=avatar_url)
-    else:
-        embed.set_author(name=nome)
+    embed.set_author(name=nome, icon_url=avatar_url) if avatar_url else embed.set_author(name=nome)
     return embed
 
 
@@ -330,10 +326,7 @@ def build_embed_youtube_live(nome, dados, mention, avatar_url=None):
         f"**🎬 [{dados['titulo']}]({dados['url']})**\n\n"
         f"{mention}"
     )
-    if avatar_url:
-        embed.set_author(name=nome, icon_url=avatar_url)
-    else:
-        embed.set_author(name=nome)
+    embed.set_author(name=nome, icon_url=avatar_url) if avatar_url else embed.set_author(name=nome)
     if dados.get("thumb"):
         embed.set_image(url=dados["thumb"])
     return embed
@@ -348,84 +341,99 @@ def build_embed_youtube_video(nome, dados, mention, avatar_url=None):
         f"**🎥 [{dados['titulo']}]({dados['url']})**\n\n"
         f"{mention}"
     )
-    if avatar_url:
-        embed.set_author(name=nome, icon_url=avatar_url)
-    else:
-        embed.set_author(name=nome)
+    embed.set_author(name=nome, icon_url=avatar_url) if avatar_url else embed.set_author(name=nome)
     if dados.get("thumb"):
         embed.set_image(url=dados["thumb"])
     return embed
 
-# ─────────────────────────────────────────
-#  EVENTOS
-# ─────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+#  BOT
+# ═══════════════════════════════════════════════════════════════
+intents = discord.Intents.default()
+intents.members         = True
+intents.presences       = True
+intents.message_content = True
+intents.voice_states    = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+def get_mention(guild, plataforma):
+    role = guild.get_role(MENTION_ROLES.get(plataforma, 0))
+    return role.mention if role else ""
+
+# ═══════════════════════════════════════════════════════════════
+#  ON READY
+# ═══════════════════════════════════════════════════════════════
 @bot.event
 async def on_ready():
     global reaction_roles_map
-    print(f"✅ Bot online como {bot.user} ({bot.user.id})")
-    print(f"   Servidores: {[g.name for g in bot.guilds]}")
+    print(f"✅ Bot online: {bot.user} ({bot.user.id})")
+    print(f"   Servidor: {[g.name for g in bot.guilds]}")
+    print(f"   CANAL_CRIAR_CALL_ID: {CANAL_CRIAR_CALL_ID}")
     reaction_roles_map = carregar_reaction_roles()
     checar_youtube.start()
     checar_twitch.start()
     limpar_cargos_presos.start()
 
-
+# ═══════════════════════════════════════════════════════════════
+#  CRIAR CALL — completamente isolado
+# ═══════════════════════════════════════════════════════════════
 @bot.event
 async def on_voice_state_update(member, before, after):
-    guild = member.guild
-    print(f"🎤 Voice update: {member.display_name} | antes: {before.channel} | depois: {after.channel} | after.channel.id: {after.channel.id if after.channel else None} | CANAL_CRIAR_CALL_ID: {CANAL_CRIAR_CALL_ID} | match: {after.channel and after.channel.id == CANAL_CRIAR_CALL_ID}")
-
-    # Usuário entrou no canal "➕ Criar Call"
+    # ── Entrou no canal Criar Call ──
     if after.channel and after.channel.id == CANAL_CRIAR_CALL_ID:
         try:
-            print(f"🔧 Criando call para {member.display_name}...")
-            categoria  = after.channel.category
             nome_canal = f"{member.display_name}'s call"
-            print(f"🔧 Categoria: {categoria} | Nome: {nome_canal}")
-            novo_canal = await guild.create_voice_channel(
+            novo_canal = await member.guild.create_voice_channel(
                 name=nome_canal,
-                category=categoria,
-                reason="Call temporária criada pelo bot"
+                category=after.channel.category,
+                reason="Call temporária"
             )
-            print(f"🔧 Canal criado: {novo_canal.id}")
             canais_temporarios[novo_canal.id] = True
             await member.move_to(novo_canal)
-            print(f"✅ Canal temporário criado: {nome_canal}")
+            print(f"✅ Call criada: {nome_canal}")
         except Exception as e:
             print(f"❌ Erro ao criar call: {e}")
+        return
 
-    # Usuário saiu de um canal temporário
+    # ── Saiu de uma call temporária ──
     if before.channel and before.channel.id in canais_temporarios:
         if len(before.channel.members) == 0:
             try:
                 await before.channel.delete(reason="Call temporária vazia")
                 del canais_temporarios[before.channel.id]
-                print(f"🗑️ Canal temporário deletado: {before.channel.name}")
+                print(f"🗑️ Call deletada: {before.channel.name}")
             except discord.NotFound:
-                pass
+                canais_temporarios.pop(before.channel.id, None)
+            except Exception as e:
+                print(f"❌ Erro ao deletar call: {e}")
 
-
+# ═══════════════════════════════════════════════════════════════
+#  REACTION ROLES — completamente isolado
+# ═══════════════════════════════════════════════════════════════
 @bot.event
 async def on_raw_reaction_add(payload):
     if payload.channel_id != CANAL_CONFIG_ROLES_ID:
         return
-    await handle_reaction(payload, adicionar=True)
+    try:
+        await handle_reaction(payload, adicionar=True)
+    except Exception as e:
+        print(f"❌ Erro reaction add: {e}")
 
 
 @bot.event
 async def on_raw_reaction_remove(payload):
     if payload.channel_id != CANAL_CONFIG_ROLES_ID:
         return
-    await handle_reaction(payload, adicionar=False)
+    try:
+        await handle_reaction(payload, adicionar=False)
+    except Exception as e:
+        print(f"❌ Erro reaction remove: {e}")
 
-# ─────────────────────────────────────────
-#  REACTION ROLES — HANDLER
-# ─────────────────────────────────────────
+
 async def handle_reaction(payload, adicionar: bool):
-    global reaction_roles_map
-    reaction_roles_map = carregar_reaction_roles()
-
-    msg_map = reaction_roles_map.get(payload.message_id)
+    mapa    = carregar_reaction_roles()
+    msg_map = mapa.get(payload.message_id)
     if not msg_map:
         return
 
@@ -443,243 +451,247 @@ async def handle_reaction(payload, adicionar: bool):
 
     if adicionar:
         await member.add_roles(role, reason="Reaction role")
-        print(f"✅ Role '{role.name}' adicionada a {member.display_name}")
+        print(f"✅ Role '{role.name}' → {member.display_name}")
     else:
         await member.remove_roles(role, reason="Reaction role removida")
-        print(f"❌ Role '{role.name}' removida de {member.display_name}")
+        print(f"➖ Role '{role.name}' ← {member.display_name}")
 
-# ─────────────────────────────────────────
-#  TASK: CHECAR YOUTUBE (a cada 5 min)
-# ─────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+#  TASK: YOUTUBE — completamente isolada
+# ═══════════════════════════════════════════════════════════════
 @tasks.loop(minutes=5)
 async def checar_youtube():
-    global primeira_checagem, lives_yt_ativas
+    global primeira_checagem, lives_yt_ativas, videos_vistos
     await bot.wait_until_ready()
+    try:
+        guild = bot.guilds[0] if bot.guilds else None
+        if not guild:
+            return
 
-    guild = bot.guilds[0] if bot.guilds else None
-    if not guild:
-        return
+        canal        = guild.get_channel(CANAL_DIVULGACAO_ID)
+        cargo_stream = discord.utils.get(guild.roles, name=CARGO_STREAMANDO_NOME)
+        canais       = get_canais_youtube()
 
-    canal        = guild.get_channel(CANAL_DIVULGACAO_ID)
-    cargo_stream = discord.utils.get(guild.roles, name=CARGO_STREAMANDO_NOME)
-    canais       = get_canais_youtube()
+        async with aiohttp.ClientSession() as session:
+            for entrada in canais:
+                try:
+                    channel_id  = entrada["channel_id"]
+                    nome        = entrada["nome"]
+                    discord_uid = entrada["discord_user_id"]
 
-    async with aiohttp.ClientSession() as session:
-        for entrada in canais:
-            channel_id  = entrada["channel_id"]
-            nome        = entrada["nome"]
-            discord_uid = entrada["discord_user_id"]
+                    conteudo = await buscar_ultimo_conteudo(session, channel_id)
+                    if not conteudo:
+                        continue
 
-            conteudo = await buscar_ultimo_conteudo(session, channel_id)
-            if not conteudo or not conteudo["id"]:
-                continue
+                    vid_id  = conteudo["id"]
+                    is_live = conteudo["is_live"]
+                    membro  = guild.get_member(int(discord_uid)) if discord_uid else None
 
-            vid_id  = conteudo["id"]
-            is_live = conteudo["is_live"]
+                    estava_em_live = lives_yt_ativas.get(channel_id) == "live"
 
-            try:
-                membro = guild.get_member(int(discord_uid))
-            except Exception:
-                membro = None
+                    # Cargo
+                    if cargo_stream and membro and not membro.bot:
+                        if is_live and not estava_em_live:
+                            await membro.add_roles(cargo_stream, reason="YT Live iniciada")
+                            print(f"🔴 Cargo adicionado (YT): {membro.display_name}")
+                        elif not is_live and estava_em_live:
+                            await membro.remove_roles(cargo_stream, reason="YT Live encerrada")
+                            print(f"🔴 Cargo removido (YT): {membro.display_name}")
 
-            estava_em_live = lives_yt_ativas.get(channel_id) == "live"
+                    # Primeira checagem: só registra, não posta
+                    if primeira_checagem:
+                        lives_yt_ativas[channel_id] = "live" if is_live else "video"
+                        salvar_json("lives_yt_ativas.json", lives_yt_ativas)
+                        if not is_live:
+                            videos_vistos[channel_id] = vid_id
+                            salvar_json("videos_vistos.json", videos_vistos)
+                        continue
 
-            # Gerencia cargo
-            if cargo_stream and membro and not membro.bot:
-                if is_live and not estava_em_live:
-                    await membro.add_roles(cargo_stream, reason="YouTube Live iniciada")
-                    print(f"🔴 Cargo adicionado (YT Live): {membro.display_name}")
-                elif not is_live and estava_em_live:
-                    await membro.remove_roles(cargo_stream, reason="YouTube Live encerrada")
-                    print(f"🔴 Cargo removido (YT Live encerrada): {membro.display_name}")
+                    # Atualiza estado
+                    lives_yt_ativas[channel_id] = "live" if is_live else "video"
+                    salvar_json("lives_yt_ativas.json", lives_yt_ativas)
 
-            # Na primeira checagem: registra estado mas não posta
-            if primeira_checagem:
-                lives_yt_ativas[channel_id] = "live" if is_live else "video"
-                salvar_json("lives_yt_ativas.json", lives_yt_ativas)
-                if not is_live:
-                    videos_vistos[channel_id] = vid_id
-                    salvar_json("videos_vistos.json", videos_vistos)
-                continue
+                    nome_exibir = membro.display_name if membro else nome
+                    avatar_url  = membro.display_avatar.url if membro else None
 
-            # Atualiza estado
-            lives_yt_ativas[channel_id] = "live" if is_live else "video"
-            salvar_json("lives_yt_ativas.json", lives_yt_ativas)
+                    if is_live:
+                        if not estava_em_live and canal:
+                            embed = build_embed_youtube_live(nome_exibir, conteudo, get_mention(guild, "youtube_live"), avatar_url)
+                            await canal.send(embed=embed)
+                            print(f"🔴 YT Live postada: {nome_exibir}")
+                    else:
+                        if videos_vistos.get(channel_id) == vid_id:
+                            continue
+                        videos_vistos[channel_id] = vid_id
+                        salvar_json("videos_vistos.json", videos_vistos)
+                        if canal:
+                            embed = build_embed_youtube_video(nome_exibir, conteudo, get_mention(guild, "youtube_video"), avatar_url)
+                            await canal.send(embed=embed)
+                            print(f"📹 YT Vídeo postado: {nome_exibir}")
 
-            nome_exibir = membro.display_name if membro else nome
-            avatar_url  = membro.display_avatar.url if membro else None
+                except Exception as e:
+                    print(f"❌ Erro YT canal {entrada.get('nome', '?')}: {e}")
 
-            if is_live:
-                # Posta só quando a live começa
-                if not estava_em_live and not primeira_checagem and canal:
-                    mention = get_mention(guild, "youtube_live")
-                    embed   = build_embed_youtube_live(nome_exibir, conteudo, mention, avatar_url)
-                    await canal.send(embed=embed)
-                    print(f"🔴 YouTube Live postada: {nome_exibir} — {conteudo['titulo']}")
-            else:
-                # Vídeo novo
-                if videos_vistos.get(channel_id) == vid_id:
-                    continue
-                videos_vistos[channel_id] = vid_id
-                salvar_json("videos_vistos.json", videos_vistos)
-                if canal:
-                    mention = get_mention(guild, "youtube_video")
-                    embed   = build_embed_youtube_video(nome_exibir, conteudo, mention, avatar_url)
-                    await canal.send(embed=embed)
-                    print(f"📹 Vídeo novo postado: {nome_exibir} — {conteudo['titulo']}")
+        primeira_checagem = False
 
-    primeira_checagem = False
+    except Exception as e:
+        print(f"❌ Erro geral checar_youtube: {e}")
 
-# ─────────────────────────────────────────
-#  TASK: CHECAR TWITCH (a cada 5 min)
-# ─────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+#  TASK: TWITCH — completamente isolada
+# ═══════════════════════════════════════════════════════════════
 @tasks.loop(minutes=5)
 async def checar_twitch():
     global lives_twitch_ativas
     await bot.wait_until_ready()
-
-    guild = bot.guilds[0] if bot.guilds else None
-    if not guild:
-        return
-
     try:
-        canal        = guild.get_channel(CANAL_DIVULGACAO_ID)
-        cargo_stream = discord.utils.get(guild.roles, name=CARGO_STREAMANDO_NOME)
-        canais       = get_canais_twitch()
+        guild = bot.guilds[0] if bot.guilds else None
+        if not guild:
+            return
 
+        canais = get_canais_twitch()
         if not canais:
             return
 
+        canal        = guild.get_channel(CANAL_DIVULGACAO_ID)
+        cargo_stream = discord.utils.get(guild.roles, name=CARGO_STREAMANDO_NOME)
+
         async with aiohttp.ClientSession() as session:
-            twitch_ids = [c["twitch_id"] for c in canais if c["twitch_id"]]
-            if not twitch_ids:
-                return
-            lives_agora = await checar_lives_twitch_api(session, twitch_ids)
+            lives_agora = await checar_lives_twitch_api(session, [c["twitch_id"] for c in canais])
 
         for entrada in canais:
-            if not entrada["twitch_id"]:
-                continue
-            twitch_id   = entrada["twitch_id"]
-            nome        = entrada["nome"]
-            discord_uid = entrada["discord_user_id"]
-
-            esta_live   = twitch_id in lives_agora
-            estava_live = lives_twitch_ativas.get(twitch_id) == "live"
-
             try:
-                membro = guild.get_member(int(discord_uid))
-            except Exception:
-                membro = None
+                twitch_id   = entrada["twitch_id"]
+                nome        = entrada["nome"]
+                discord_uid = entrada["discord_user_id"]
 
-            # Gerencia cargo
-            if cargo_stream and membro and not membro.bot:
-                if esta_live and not estava_live:
-                    await membro.add_roles(cargo_stream, reason="Twitch Live iniciada")
-                    print(f"🟣 Cargo adicionado (Twitch): {nome}")
-                elif not esta_live and estava_live:
-                    await membro.remove_roles(cargo_stream, reason="Twitch Live encerrada")
-                    print(f"🟣 Cargo removido (Twitch encerrada): {nome}")
+                esta_live   = twitch_id in lives_agora
+                estava_live = lives_twitch_ativas.get(twitch_id) == "live"
+                membro      = guild.get_member(int(discord_uid)) if discord_uid else None
 
-            # Atualiza estado
-            lives_twitch_ativas[twitch_id] = "live" if esta_live else "offline"
-            salvar_json("lives_twitch_ativas.json", lives_twitch_ativas)
+                # Cargo
+                if cargo_stream and membro and not membro.bot:
+                    if esta_live and not estava_live:
+                        await membro.add_roles(cargo_stream, reason="Twitch Live iniciada")
+                        print(f"🟣 Cargo adicionado (Twitch): {nome}")
+                    elif not esta_live and estava_live:
+                        await membro.remove_roles(cargo_stream, reason="Twitch Live encerrada")
+                        print(f"🟣 Cargo removido (Twitch): {nome}")
 
-            # Posta embed quando live começa
-            if esta_live and not estava_live and canal:
-                dados       = lives_agora[twitch_id]
-                mention     = get_mention(guild, "twitch")
-                nome_exibir = membro.display_name if membro else nome
-                avatar_url  = membro.display_avatar.url if membro else None
-                embed       = build_embed_twitch(nome_exibir, dados, mention, avatar_url)
-                await canal.send(embed=embed)
-                print(f"🟣 Twitch Live postada: {nome_exibir} — {dados['titulo']}")
+                # Atualiza estado
+                lives_twitch_ativas[twitch_id] = "live" if esta_live else "offline"
+                salvar_json("lives_twitch_ativas.json", lives_twitch_ativas)
+
+                # Posta embed
+                if esta_live and not estava_live and canal:
+                    dados       = lives_agora[twitch_id]
+                    nome_exibir = membro.display_name if membro else nome
+                    avatar_url  = membro.display_avatar.url if membro else None
+                    embed       = build_embed_twitch(nome_exibir, dados, get_mention(guild, "twitch"), avatar_url)
+                    await canal.send(embed=embed)
+                    print(f"🟣 Twitch Live postada: {nome_exibir}")
+
+            except Exception as e:
+                print(f"❌ Erro Twitch canal {entrada.get('nome', '?')}: {e}")
 
     except Exception as e:
-        print(f"❌ Erro em checar_twitch: {e}")
+        print(f"❌ Erro geral checar_twitch: {e}")
 
-# ─────────────────────────────────────────
-#  TASK: LIMPAR CARGOS PRESOS (a cada 10 min)
-# ─────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+#  TASK: LIMPAR CARGOS PRESOS — completamente isolada
+# ═══════════════════════════════════════════════════════════════
 @tasks.loop(minutes=10)
 async def limpar_cargos_presos():
     await bot.wait_until_ready()
-    guild = bot.guilds[0] if bot.guilds else None
-    if not guild:
-        return
+    try:
+        guild = bot.guilds[0] if bot.guilds else None
+        if not guild:
+            return
 
-    cargo_stream = discord.utils.get(guild.roles, name=CARGO_STREAMANDO_NOME)
-    if not cargo_stream:
-        return
+        cargo_stream = discord.utils.get(guild.roles, name=CARGO_STREAMANDO_NOME)
+        if not cargo_stream:
+            return
 
-    canais_yt     = {int(c["discord_user_id"]): c["channel_id"] for c in get_canais_youtube()}
-    canais_twitch = {int(c["discord_user_id"]): c["twitch_id"] for c in get_canais_twitch()}
+        canais_yt     = {int(c["discord_user_id"]): c["channel_id"] for c in get_canais_youtube()}
+        canais_twitch = {int(c["discord_user_id"]): c["twitch_id"]  for c in get_canais_twitch()}
 
-    for membro in cargo_stream.members:
-        if membro.bot:
-            await membro.remove_roles(cargo_stream, reason="Bot não deve ter cargo de streaming")
-            print(f"🧹 Cargo removido do bot: {membro.display_name}")
-            continue
+        for membro in list(cargo_stream.members):
+            try:
+                if membro.bot:
+                    await membro.remove_roles(cargo_stream, reason="Bot não deve ter cargo de stream")
+                    print(f"🧹 Cargo removido do bot: {membro.display_name}")
+                    continue
 
-        channel_id = canais_yt.get(membro.id)
-        twitch_id  = canais_twitch.get(membro.id)
+                channel_id = canais_yt.get(membro.id)
+                twitch_id  = canais_twitch.get(membro.id)
 
-        em_live_yt     = lives_yt_ativas.get(channel_id) == "live" if channel_id else False
-        em_live_twitch = lives_twitch_ativas.get(twitch_id) == "live" if twitch_id else False
+                em_live_yt     = lives_yt_ativas.get(channel_id)    == "live" if channel_id else False
+                em_live_twitch = lives_twitch_ativas.get(twitch_id) == "live" if twitch_id  else False
 
-        if not em_live_yt and not em_live_twitch:
-            await membro.remove_roles(cargo_stream, reason="Não está mais streamando")
-            print(f"🧹 Cargo removido (preso): {membro.display_name}")
+                if not em_live_yt and not em_live_twitch:
+                    await membro.remove_roles(cargo_stream, reason="Não está mais streamando")
+                    print(f"🧹 Cargo removido (preso): {membro.display_name}")
 
-# ─────────────────────────────────────────
-#  COMANDO: !setup_roles
-# ─────────────────────────────────────────
+            except Exception as e:
+                print(f"❌ Erro ao limpar cargo de {membro.display_name}: {e}")
+
+    except Exception as e:
+        print(f"❌ Erro geral limpar_cargos_presos: {e}")
+
+# ═══════════════════════════════════════════════════════════════
+#  COMANDO: !setup_roles — completamente isolado
+# ═══════════════════════════════════════════════════════════════
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setup_roles(ctx):
     if ctx.channel.id != CANAL_CONFIG_ROLES_ID:
         await ctx.send("❌ Use esse comando no canal de configuração de roles.", delete_after=5)
         return
+    try:
+        with open("reaction_roles.json", "r") as f:
+            data = json.load(f)
 
-    with open("reaction_roles.json", "r") as f:
-        data = json.load(f)
+        canal = bot.get_channel(CANAL_CONFIG_ROLES_ID)
 
-    canal = bot.get_channel(CANAL_CONFIG_ROLES_ID)
+        for i, bloco in enumerate(data["mensagens"]):
+            titulo = TITULOS_BLOCOS.get(i, f"## {bloco['descricao']} ##")
+            linhas = "\n".join(f"{r['emoji']} → {r['descricao']}" for r in bloco["reactions"])
+            embed  = discord.Embed(
+                description=f"{titulo}\n\n{linhas}\n\n-# Você receberá o cargo referente à role que reagir ao emote.",
+                color=0x99AAB5
+            )
 
-    for i, bloco in enumerate(data["mensagens"]):
-        titulo = TITULOS_BLOCOS.get(i, f"## {bloco['descricao']} ##")
-        linhas = "\n".join(f"{r['emoji']} → {r['descricao']}" for r in bloco["reactions"])
-        embed  = discord.Embed(
-            description=f"{titulo}\n\n{linhas}\n\n-# Você receberá o cargo referente à role que reagir ao emote.",
-            color=0x99AAB5
-        )
+            msg_id = bloco.get("message_id")
+            msg    = None
 
-        msg_id = bloco.get("message_id")
-        msg    = None
+            if msg_id:
+                try:
+                    msg = await canal.fetch_message(int(msg_id))
+                    await msg.edit(content=None, embed=embed)
+                except discord.NotFound:
+                    msg = None
 
-        if msg_id:
-            try:
-                msg = await canal.fetch_message(int(msg_id))
-                await msg.edit(content=None, embed=embed)
-            except discord.NotFound:
-                msg = None
+            if msg is None:
+                msg = await ctx.send(embed=embed)
+                for r in bloco["reactions"]:
+                    emoji = bot.get_emoji(int(r["emoji_id"]))
+                    if emoji:
+                        await msg.add_reaction(emoji)
 
-        if msg is None:
-            msg = await ctx.send(embed=embed)
-            for r in bloco["reactions"]:
-                emoji = bot.get_emoji(int(r["emoji_id"]))
-                if emoji:
-                    await msg.add_reaction(emoji)
+            data["mensagens"][i]["message_id"] = str(msg.id)
+            save_message_id(f"message_id_{i}", msg.id)
 
-        data["mensagens"][i]["message_id"] = str(msg.id)
-        save_message_id(f"message_id_{i}", msg.id)
+        with open("reaction_roles.json", "w") as f:
+            json.dump(data, f, indent=2)
 
-    with open("reaction_roles.json", "w") as f:
-        json.dump(data, f, indent=2)
+        await ctx.message.delete()
+        print("✅ Reaction roles configurados!")
 
-    await ctx.message.delete()
-    print("✅ Reaction roles configurados!")
+    except Exception as e:
+        print(f"❌ Erro setup_roles: {e}")
+        await ctx.send(f"❌ Erro: {e}", delete_after=10)
 
-# ─────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
 #  RODAR
-# ─────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
 bot.run(TOKEN)
