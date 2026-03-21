@@ -17,10 +17,14 @@ SPREADSHEET_ID       = os.environ.get("SPREADSHEET_ID")
 TWITCH_CLIENT_ID     = os.environ.get("TWITCH_CLIENT_ID")
 TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET")
 CANAL_CRIAR_CALL_ID  = int(os.environ.get("CANAL_CRIAR_CALL_ID", 0))
+ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY")
 
-CANAL_DIVULGACAO_ID   = 1468613615987851275
-CANAL_CONFIG_ROLES_ID = 1479645122428932198
-CARGO_STREAMANDO_NOME = "STREAMANDO AGORA"
+CANAL_DIVULGACAO_ID    = 1468613615987851275
+CANAL_CONFIG_ROLES_ID  = 1479645122428932198
+CANAL_BOAS_VINDAS_ID   = 1465061820451520754
+CANAL_APRESENTACAO_ID  = 1465074754246676591
+CARGO_STREAMANDO_NOME  = "STREAMANDO AGORA"
+CARGO_LADO_FORA_ID     = 1465890444746559663
 
 MENTION_ROLES = {
     "twitch":        1478843698614898688,
@@ -375,6 +379,84 @@ async def on_ready():
     checar_twitch.start()
     limpar_cargos_presos.start()
     limpar_calls_vazias.start()
+
+
+# ═══════════════════════════════════════════════════════════════
+#  BOAS-VINDAS — AUTOROLE + MENSAGEM IA
+# ═══════════════════════════════════════════════════════════════
+async def gerar_boas_vindas(nome: str) -> str:
+    """Gera mensagem de boas-vindas personalizada via Claude."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key":         ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type":      "application/json",
+                },
+                json={
+                    "model":      "claude-sonnet-4-20250514",
+                    "max_tokens": 300,
+                    "messages": [{
+                        "role":    "user",
+                        "content": (
+                            f"Crie uma mensagem de boas-vindas curta, criativa e animada para '{nome}' "
+                            f"que acabou de entrar no servidor Discord 'Rebuildando Achievements'. "
+                            f"O servidor é uma comunidade de jogadores de RetroAchievements e entusiastas de lives "
+                            f"de Twitch e YouTube. A mensagem deve ser em português brasileiro, "
+                            f"ter no máximo 3 linhas, mencionar o nome da pessoa, e ter personalidade — "
+                            f"pode ser engraçada, épica, acolhedora, o que fizer mais sentido. "
+                            f"Retorne apenas a mensagem, sem explicações."
+                        )
+                    }]
+                },
+                timeout=aiohttp.ClientTimeout(total=15)
+            ) as resp:
+                data = await resp.json()
+                return data["content"][0]["text"].strip()
+    except Exception as e:
+        print(f"❌ Erro ao gerar boas-vindas com IA: {e}")
+        return f"Bem-vindo ao Rebuildando Achievements, **{nome}**! 🎮"
+
+
+@bot.event
+async def on_member_join(member):
+    guild = member.guild
+
+    # 1. Autorole — atribui [LADO DE FORA]
+    try:
+        cargo = guild.get_role(CARGO_LADO_FORA_ID)
+        if cargo:
+            await member.add_roles(cargo, reason="Autorole — entrou no servidor")
+            print(f"✅ Autorole atribuído: {member.display_name}")
+    except Exception as e:
+        print(f"❌ Erro ao atribuir autorole: {e}")
+
+    # 2. Mensagem de boas-vindas com IA
+    try:
+        canal = guild.get_channel(CANAL_BOAS_VINDAS_ID)
+        if not canal:
+            return
+
+        mensagem_ia = await gerar_boas_vindas(member.display_name)
+
+        embed = discord.Embed(color=0x57F287, timestamp=datetime.utcnow())
+        embed.set_author(
+            name=member.display_name,
+            icon_url=member.display_avatar.url
+        )
+        embed.description = (
+            f"{mensagem_ia}\n\n"
+            f"📋 Para ter acesso ao servidor, vá até <#{CANAL_APRESENTACAO_ID}> "
+            f"e se apresente para a galera!"
+        )
+        embed.set_footer(text=f"Membro #{guild.member_count}")
+
+        await canal.send(content=member.mention, embed=embed)
+        print(f"✅ Boas-vindas enviadas: {member.display_name}")
+    except Exception as e:
+        print(f"❌ Erro ao enviar boas-vindas: {e}")
 
 # ═══════════════════════════════════════════════════════════════
 #  CALLS TEMPORÁRIAS — PLANILHA
