@@ -36,6 +36,7 @@ MENTION_ROLES = {
 TITULOS_BLOCOS = {
     0: "## NOTIFICAÇÕES ##",
     1: "## Criadores de conteúdo ##\n### Para ver os canais de comunicação específicos desses canais ###",
+    2: "## Jogatina ##\n### Para ver os canais de comunicação específicos de cada jogo ###",
 }
 
 # ═══════════════════════════════════════════════════════════════

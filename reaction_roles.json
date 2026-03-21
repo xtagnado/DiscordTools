@@ -42,5 +42,22 @@
         }
       ]
     }
+    {
+      "descricao": "Jogatina",
+      "reactions": [
+        {
+          "emoji": "<:RAico:1467585756028604544>",
+          "emoji_id": "1467585756028604544",
+          "role_id": 1467579565542084851,
+          "descricao": "Ver a categoria Retroachievements."
+        },
+        {
+          "emoji": "<:archipelago:1485059402384936961>",
+          "emoji_id": "1485059402384936961",
+          "role_id": 1467579746291552426,
+          "descricao": "Ver a categoria Archipelago."
+        }
+      ]
+    }
   ]
 }
