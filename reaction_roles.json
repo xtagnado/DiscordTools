@@ -2,6 +2,7 @@
   "mensagens": [
     {
       "descricao": "Serviços",
+      "message_id": "1485051907352432791",
       "reactions": [
         {
           "emoji": "<:Twitch:1479643900892418221>",
@@ -25,6 +26,7 @@
     },
     {
       "descricao": "Criadores",
+      "message_id": "1485051921281847477",
       "reactions": [
         {
           "emoji": "<:UdonLike:1086254234242125834>",
