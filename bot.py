@@ -18,6 +18,7 @@ TWITCH_CLIENT_ID     = os.environ.get("TWITCH_CLIENT_ID")
 TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET")
 CANAL_CRIAR_CALL_ID  = int(os.environ.get("CANAL_CRIAR_CALL_ID", 0))
 ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY")
+GROQ_API_KEY         = os.environ.get("GROQ_API_KEY")
 
 CANAL_DIVULGACAO_ID    = 1468613615987851275
 CANAL_CONFIG_ROLES_ID  = 1479645122428932198
@@ -385,40 +386,38 @@ async def on_ready():
 #  BOAS-VINDAS — AUTOROLE + MENSAGEM IA
 # ═══════════════════════════════════════════════════════════════
 async def gerar_boas_vindas(nome: str) -> str:
-    """Gera mensagem de boas-vindas personalizada via Claude."""
+    """Gera mensagem de boas-vindas personalizada via Groq (grátis)."""
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                "https://api.anthropic.com/v1/messages",
+                "https://api.groq.com/openai/v1/chat/completions",
                 headers={
-                    "x-api-key":         ANTHROPIC_API_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "content-type":      "application/json",
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type":  "application/json",
                 },
                 json={
-                    "model":      "claude-sonnet-4-20250514",
+                    "model":      "llama3-8b-8192",
                     "max_tokens": 300,
-                    "messages": [{
-                        "role":    "user",
-                        "content": (
-                            f"Crie uma mensagem de boas-vindas curta, criativa e animada para '{nome}' "
-                            f"que acabou de entrar no servidor Discord 'Rebuildando Achievements'. "
-                            f"O servidor é uma comunidade de jogadores de RetroAchievements e entusiastas de lives "
-                            f"de Twitch e YouTube. A mensagem deve ser em português brasileiro, "
-                            f"ter no máximo 3 linhas, mencionar o nome da pessoa, e ter personalidade — "
-                            f"pode ser engraçada, épica, acolhedora, o que fizer mais sentido. "
-                            f"Retorne apenas a mensagem, sem explicações."
-                        )
-                    }]
+                    "messages": [
+                        {
+                            "role":    "system",
+                            "content": (
+                                "Você é o bot de boas-vindas do servidor Discord 'Rebuildando Achievements', "
+                                "uma comunidade de jogadores de RetroAchievements e entusiastas de lives de Twitch e YouTube. "
+                                "Gere mensagens curtas, criativas e animadas em português brasileiro. "
+                                "Máximo 3 linhas. Apenas a mensagem, sem explicações."
+                            )
+                        },
+                        {
+                            "role":    "user",
+                            "content": f"Crie uma mensagem de boas-vindas para '{nome}' que acabou de entrar no servidor."
+                        }
+                    ]
                 },
                 timeout=aiohttp.ClientTimeout(total=15)
             ) as resp:
                 data = await resp.json()
-                if "content" in data and data["content"]:
-                    return data["content"][0]["text"].strip()
-                else:
-                    print(f"❌ Resposta inesperada da API: {data}")
-                    return f"Bem-vindo ao Rebuildando Achievements, **{nome}**! 🎮"
+                return data["choices"][0]["message"]["content"].strip()
     except Exception as e:
         print(f"❌ Erro ao gerar boas-vindas com IA: {e}")
         return f"Bem-vindo ao Rebuildando Achievements, **{nome}**! 🎮"
