@@ -417,7 +417,11 @@ async def gerar_boas_vindas(nome: str) -> str:
                 timeout=aiohttp.ClientTimeout(total=15)
             ) as resp:
                 data = await resp.json()
-                return data["choices"][0]["message"]["content"].strip()
+                if "choices" in data and data["choices"]:
+                    return data["choices"][0]["message"]["content"].strip()
+                else:
+                    print(f"❌ Resposta inesperada da Groq: {data}")
+                    return f"Bem-vindo ao Rebuildando Achievements, **{nome}**! 🎮"
     except Exception as e:
         print(f"❌ Erro ao gerar boas-vindas com IA: {e}")
         return f"Bem-vindo ao Rebuildando Achievements, **{nome}**! 🎮"
