@@ -61,6 +61,10 @@ def salvar_json(path, data):
 videos_vistos       = carregar_json("videos_vistos.json")
 lives_yt_ativas     = carregar_json("lives_yt_ativas.json")
 lives_twitch_ativas = carregar_json("lives_twitch_ativas.json")
+# Contador de checagens sem live — só remove cargo após 2 falhas consecutivas
+falhas_yt     = {}  # {channel_id: contagem}
+falhas_twitch = {}  # {twitch_id: contagem}
+FALHAS_PARA_REMOVER = 2
 canais_temporarios  = {}
 primeira_checagem   = True
 twitch_access_token = None
@@ -659,24 +663,43 @@ async def checar_youtube():
                     # Cargo
                     if cargo_stream and membro and not membro.bot:
                         if is_live and not estava_em_live:
+                            falhas_yt[channel_id] = 0
                             await membro.add_roles(cargo_stream, reason="YT Live iniciada")
                             print(f"🔴 Cargo adicionado (YT): {membro.display_name}")
+                        elif is_live and estava_em_live:
+                            falhas_yt[channel_id] = 0  # ainda em live, zera falhas
                         elif not is_live and estava_em_live:
-                            await membro.remove_roles(cargo_stream, reason="YT Live encerrada")
-                            print(f"🔴 Cargo removido (YT): {membro.display_name}")
+                            falhas_yt[channel_id] = falhas_yt.get(channel_id, 0) + 1
+                            print(f"⚠️ Falha YT {falhas_yt[channel_id]}/{FALHAS_PARA_REMOVER}: {membro.display_name}")
+                            if falhas_yt[channel_id] >= FALHAS_PARA_REMOVER:
+                                await membro.remove_roles(cargo_stream, reason="YT Live encerrada")
+                                print(f"🔴 Cargo removido (YT): {membro.display_name}")
+                                falhas_yt[channel_id] = 0
 
                     # Primeira checagem: só registra, não posta
                     if primeira_checagem:
                         lives_yt_ativas[channel_id] = "live" if is_live else "video"
                         salvar_json("lives_yt_ativas.json", lives_yt_ativas)
                         if not is_live:
-                            videos_vistos[channel_id] = vid_id
+                            vistos = videos_vistos.get(channel_id, [])
+                            if isinstance(vistos, str):
+                                vistos = [vistos]
+                            if vid_id not in vistos:
+                                vistos.append(vid_id)
+                            videos_vistos[channel_id] = vistos[-10:]
                             salvar_json("videos_vistos.json", videos_vistos)
                         continue
 
-                    # Atualiza estado
-                    lives_yt_ativas[channel_id] = "live" if is_live else "video"
-                    salvar_json("lives_yt_ativas.json", lives_yt_ativas)
+                    # Atualiza estado — só muda de live→video após confirmar 2 falhas
+                    if is_live:
+                        lives_yt_ativas[channel_id] = "live"
+                        salvar_json("lives_yt_ativas.json", lives_yt_ativas)
+                    elif estava_em_live and falhas_yt.get(channel_id, 0) >= FALHAS_PARA_REMOVER:
+                        lives_yt_ativas[channel_id] = "video"
+                        salvar_json("lives_yt_ativas.json", lives_yt_ativas)
+                    elif not estava_em_live:
+                        lives_yt_ativas[channel_id] = "video"
+                        salvar_json("lives_yt_ativas.json", lives_yt_ativas)
 
                     nome_exibir = membro.display_name if membro else nome
                     avatar_url  = membro.display_avatar.url if membro else None
@@ -686,10 +709,19 @@ async def checar_youtube():
                             embed = build_embed_youtube_live(nome_exibir, conteudo, get_mention(guild, "youtube_live"), avatar_url)
                             await canal.send(embed=embed)
                             print(f"🔴 YT Live postada: {nome_exibir}")
+                    elif estava_em_live and falhas_yt.get(channel_id, 0) < FALHAS_PARA_REMOVER:
+                        # Ainda dentro da janela de tolerância — não posta vídeo ainda
+                        pass
                     else:
-                        if videos_vistos.get(channel_id) == vid_id:
+                        # Vídeo — checa se já foi postado
+                        vistos = videos_vistos.get(channel_id, [])
+                        if isinstance(vistos, str):
+                            vistos = [vistos]  # migra formato antigo
+                        if vid_id in vistos:
                             continue
-                        videos_vistos[channel_id] = vid_id
+                        vistos.append(vid_id)
+                        # Mantém só os últimos 10 IDs para não crescer infinito
+                        videos_vistos[channel_id] = vistos[-10:]
                         salvar_json("videos_vistos.json", videos_vistos)
                         if canal:
                             embed = build_embed_youtube_video(nome_exibir, conteudo, get_mention(guild, "youtube_video"), avatar_url)
@@ -739,11 +771,18 @@ async def checar_twitch():
                 # Cargo
                 if cargo_stream and membro and not membro.bot:
                     if esta_live and not estava_live:
+                        falhas_twitch[twitch_id] = 0
                         await membro.add_roles(cargo_stream, reason="Twitch Live iniciada")
                         print(f"🟣 Cargo adicionado (Twitch): {nome}")
+                    elif esta_live and estava_live:
+                        falhas_twitch[twitch_id] = 0  # ainda em live, zera falhas
                     elif not esta_live and estava_live:
-                        await membro.remove_roles(cargo_stream, reason="Twitch Live encerrada")
-                        print(f"🟣 Cargo removido (Twitch): {nome}")
+                        falhas_twitch[twitch_id] = falhas_twitch.get(twitch_id, 0) + 1
+                        print(f"⚠️ Falha Twitch {falhas_twitch[twitch_id]}/{FALHAS_PARA_REMOVER}: {nome}")
+                        if falhas_twitch[twitch_id] >= FALHAS_PARA_REMOVER:
+                            await membro.remove_roles(cargo_stream, reason="Twitch Live encerrada")
+                            print(f"🟣 Cargo removido (Twitch): {nome}")
+                            falhas_twitch[twitch_id] = 0
 
                 # Atualiza estado
                 lives_twitch_ativas[twitch_id] = "live" if esta_live else "offline"
@@ -795,7 +834,11 @@ async def limpar_cargos_presos():
                 em_live_yt     = lives_yt_ativas.get(channel_id)    == "live" if channel_id else False
                 em_live_twitch = lives_twitch_ativas.get(twitch_id) == "live" if twitch_id  else False
 
-                if not em_live_yt and not em_live_twitch:
+                # Respeita o contador de falhas — só remove se já confirmou fim de live
+                falha_yt_confirmada     = falhas_yt.get(channel_id, 0) >= FALHAS_PARA_REMOVER if channel_id else True
+                falha_twitch_confirmada = falhas_twitch.get(twitch_id, 0) >= FALHAS_PARA_REMOVER if twitch_id else True
+
+                if not em_live_yt and not em_live_twitch and falha_yt_confirmada and falha_twitch_confirmada:
                     await membro.remove_roles(cargo_stream, reason="Não está mais streamando")
                     print(f"🧹 Cargo removido (preso): {membro.display_name}")
 
